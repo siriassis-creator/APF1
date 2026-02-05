@@ -108,15 +108,12 @@ function App() {
     const isPosto = orders.every(o => o.channel.includes("POSTO"));
     const hasMtdc = orders.some(o => o.channel.includes("MTDC"));
 
-    // Check 10W (Posto Only)
     if (isPosto && totalW <= VEHICLE_SPECS['10W'].maxKg && drops <= VEHICLE_SPECS['10W'].maxDrops) {
         if (totalW > 6000) return '10W';
     }
-    // Check 6W (Posto Only)
     if (isPosto && totalW <= VEHICLE_SPECS['6W'].maxKg && drops <= VEHICLE_SPECS['6W'].maxDrops) {
         if (totalW > 3000) return '6W';
     }
-    // Check 4W (Any Channel)
     if (totalW <= VEHICLE_SPECS['4W'].maxKg) {
         const limit = hasMtdc ? VEHICLE_SPECS['4W'].mtdcDropLimit : VEHICLE_SPECS['4W'].maxDrops;
         if (drops <= limit) return '4W';
@@ -144,8 +141,9 @@ function App() {
                 currentTrip.push(unassigned.shift());
                 lastPos = { lat: candidate.lat, lng: candidate.lng };
             } else {
-                if (currentTrip.length === 0) rejected.push(unassigned.shift());
-                else break;
+                if (currentTrip.length === 0) {
+                  rejected.push(unassigned.shift());
+                } else break;
             }
         }
         if (currentTrip.length > 0) trips.push({ orders: currentTrip, type: determineVehicle(currentTrip) });
@@ -212,7 +210,7 @@ function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'Sarabun, sans-serif' }}>
-      <div style={{ width: '400px', padding: '20px', overflowY: 'auto', borderRight: '1px solid #ddd', backgroundColor: '#f8f9fa' }}>
+      <div style={{ width: '420px', padding: '20px', overflowY: 'auto', borderRight: '1px solid #ddd', backgroundColor: '#f8f9fa' }}>
         <h3 style={{ margin: '0 0 15px 0' }}>🚛 Smart Dispatcher</h3>
         
         <div style={{ background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', marginBottom: '15px' }}>
@@ -241,19 +239,53 @@ function App() {
             <button onClick={exportToExcel} style={{ width: '100%', padding: '10px', backgroundColor: '#28a745', color: '#fff', border: 'none', borderRadius: '5px', fontWeight: 'bold', cursor: 'pointer' }}>📊 3. Export to Excel</button>
         )}
 
-        <div style={{ marginTop: '15px', fontSize: '0.85rem', color: '#27ae60' }}>{statusMsg}</div>
+        <div style={{ marginTop: '15px', fontSize: '0.85rem', color: '#27ae60', fontWeight: 'bold' }}>{statusMsg}</div>
 
-        {leftovers.length > 0 && <div style={{ color: 'red', fontSize: '0.75rem', marginTop: '10px' }}>⚠️ ตกค้าง {leftovers.length} รายการ (ไม่เข้าเงื่อนไขรถ)</div>}
+        {/* --- ส่วนแสดงสินค้าตกค้าง --- */}
+        {leftovers.length > 0 && (
+          <div style={{ marginTop: '20px', background: '#fff0f0', padding: '12px', borderRadius: '8px', border: '1px solid #ffcccc' }}>
+            <h4 style={{ margin: '0 0 10px 0', color: '#d9534f', fontSize: '0.9rem' }}>⚠️ รายการตกค้าง ({leftovers.length})</h4>
+            <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+              {leftovers.map((item, idx) => (
+                <div key={idx} style={{ fontSize: '0.75rem', padding: '5px 0', borderBottom: '1px solid #ffdada' }}>
+                  <b>{item.name}</b><br/>
+                  <span>📦 {item.cases} ลัง | ⚖️ {item.weight.toLocaleString()} kg</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
+        {/* --- รายการรถและ Route ย่อย --- */}
+        <h4 style={{ marginTop: '20px', marginBottom: '10px' }}>คิวรถที่จัดได้:</h4>
         {routeResults.map(trip => (
-          <div key={trip.id} onClick={() => setActiveTripId(trip.id)} style={{ padding: '12px', marginTop: '12px', backgroundColor: '#fff', borderLeft: `6px solid ${trip.color}`, cursor: 'pointer', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <b>คันที่ {trip.id}: {trip.vType}</b>
-                <span style={{ fontSize: '0.7rem', padding: '2px 5px', borderRadius: '5px', background: parseFloat(trip.loadFactor) >= 90 ? '#d4edda' : '#eee', color: parseFloat(trip.loadFactor) >= 90 ? '#155724' : '#333' }}>
-                    {trip.loadFactor}%
+          <div key={trip.id} onClick={() => setActiveTripId(activeTripId === trip.id ? null : trip.id)} style={{ padding: '12px', marginTop: '12px', backgroundColor: '#fff', borderLeft: `6px solid ${trip.color}`, cursor: 'pointer', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <b style={{ fontSize: '0.9rem' }}>คันที่ {trip.id}: {trip.vType}</b>
+                <span style={{ fontSize: '0.7rem', padding: '2px 5px', borderRadius: '5px', background: parseFloat(trip.loadFactor) >= 80 ? '#d4edda' : '#eee', color: parseFloat(trip.loadFactor) >= 80 ? '#155724' : '#333' }}>
+                    {trip.loadFactor}% Load
                 </span>
             </div>
-            <div style={{ fontSize: '0.8rem', color: '#666' }}>⚖️ {trip.weight.toLocaleString()} kg | 📍 {trip.stops} Drop</div>
+            <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '4px' }}>
+                ⚖️ {trip.weight.toLocaleString()} kg | 📦 {trip.cases} ลัง | 📍 {trip.stops} จุด
+            </div>
+
+            {/* ส่วนแสดงเส้นทางย่อย (แสดงเมื่อคลิก) */}
+            {activeTripId === trip.id && (
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #ccc', fontSize: '0.75rem' }}>
+                <div style={{ color: '#007AFF', marginBottom: '8px', fontWeight: 'bold' }}>📍 รายละเอียดเส้นทาง:</div>
+                {trip.legs.map((leg, idx) => (
+                  <div key={idx} style={{ marginBottom: '6px', paddingLeft: '10px', borderLeft: '1px solid #ddd' }}>
+                    <div style={{ color: '#333' }}>
+                      {idx + 1}. {idx < trip.orderedStops.length ? trip.orderedStops[idx].name : (isRoundTrip ? "กลับบริษัท" : "จุดสุดท้าย")}
+                    </div>
+                    <div style={{ color: '#888', fontSize: '0.7rem' }}>
+                      🚩 {leg.distance.text} | 🕒 {leg.duration.text}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -261,10 +293,17 @@ function App() {
       <div style={{ flexGrow: 1 }}>
         {isLoaded && (
           <GoogleMap mapContainerStyle={containerStyle} center={depotPos || center} zoom={11}>
-            {depotPos && <MarkerF position={depotPos} />}
+            {depotPos && <MarkerF position={depotPos} label="START" />}
             {routeResults.map(trip => (
               (activeTripId === null || activeTripId === trip.id) && 
-              <DirectionsRenderer key={trip.id} directions={trip.data} options={{ polylineOptions: { strokeColor: trip.color, strokeWeight: 6 } }} />
+              <DirectionsRenderer 
+                key={trip.id} 
+                directions={trip.data} 
+                options={{ 
+                  polylineOptions: { strokeColor: trip.color, strokeWeight: 6, strokeOpacity: 0.8 },
+                  suppressMarkers: false 
+                }} 
+              />
             ))}
           </GoogleMap>
         )}
