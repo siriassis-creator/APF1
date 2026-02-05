@@ -108,12 +108,21 @@ function App() {
     const isPosto = orders.every(o => o.channel.includes("POSTO"));
     const hasMtdc = orders.some(o => o.channel.includes("MTDC"));
 
+    // 1. Check 10W (เงื่อนไขเดิม: เฉพาะ POSTO)
     if (isPosto && totalW <= VEHICLE_SPECS['10W'].maxKg && drops <= VEHICLE_SPECS['10W'].maxDrops) {
         if (totalW > 6000) return '10W';
     }
-    if (isPosto && totalW <= VEHICLE_SPECS['6W'].maxKg && drops <= VEHICLE_SPECS['6W'].maxDrops) {
-        if (totalW > 3000) return '6W';
+
+    // 2. Check 6W (เงื่อนไขใหม่: ทุก Channel + Priority 80% Load)
+    // เช็คว่ามีตัวไหนตัวเดียวที่น้ำหนัก >= 80% ของ 6W (4800 kg) หรือไม่
+    const hasHeavyOrder = orders.some(o => o.weight >= (VEHICLE_SPECS['6W'].maxKg * 0.8));
+    
+    if (totalW <= VEHICLE_SPECS['6W'].maxKg && drops <= VEHICLE_SPECS['6W'].maxDrops) {
+        // ถ้ามีออเดอร์หนักตัวเดียว หรือ น้ำหนักรวมเกิน 4W ให้ใช้ 6W
+        if (hasHeavyOrder || totalW > 3000) return '6W';
     }
+
+    // 3. Check 4W (Any Channel)
     if (totalW <= VEHICLE_SPECS['4W'].maxKg) {
         const limit = hasMtdc ? VEHICLE_SPECS['4W'].mtdcDropLimit : VEHICLE_SPECS['4W'].maxDrops;
         if (drops <= limit) return '4W';
@@ -124,6 +133,10 @@ function App() {
   async function calculateRoute() {
     setIsCalculating(true);
     let unassigned = [...filteredOrders.filter(o => o.lat !== null)];
+    
+    // Sort เพื่อหาตัวหนัก (80% ของ 6W) ก่อนเพื่อจองรถ 6W ตามเงื่อนไขใหม่
+    unassigned.sort((a, b) => b.weight - a.weight);
+
     const trips = [];
     const rejected = [];
 
@@ -132,6 +145,7 @@ function App() {
         let lastPos = depotPos || center;
 
         while (unassigned.length > 0) {
+            // ถ้าใน trip ยังว่าง ให้ลองดึงตัวที่ใกล้ที่สุด
             unassigned.sort((a, b) => getDist(lastPos.lat, lastPos.lng, a.lat, a.lng) - getDist(lastPos.lat, lastPos.lng, b.lat, b.lng));
             const candidate = unassigned[0];
             const testSet = [...currentTrip, candidate];
@@ -141,9 +155,8 @@ function App() {
                 currentTrip.push(unassigned.shift());
                 lastPos = { lat: candidate.lat, lng: candidate.lng };
             } else {
-                if (currentTrip.length === 0) {
-                  rejected.push(unassigned.shift());
-                } else break;
+                if (currentTrip.length === 0) rejected.push(unassigned.shift());
+                else break;
             }
         }
         if (currentTrip.length > 0) trips.push({ orders: currentTrip, type: determineVehicle(currentTrip) });
@@ -241,9 +254,8 @@ function App() {
 
         <div style={{ marginTop: '15px', fontSize: '0.85rem', color: '#27ae60', fontWeight: 'bold' }}>{statusMsg}</div>
 
-        {/* --- ส่วนแสดงสินค้าตกค้าง --- */}
         {leftovers.length > 0 && (
-          <div style={{ marginTop: '20px', background: '#fff0f0', padding: '12px', borderRadius: '8px', border: '1px solid #ffcccc' }}>
+          <div style={{ marginTop: '20px', background: '#fff0f0', padding: '12px', borderRadius: '8px', border: '1px solid #ffcccc', textAlign: 'left' }}>
             <h4 style={{ margin: '0 0 10px 0', color: '#d9534f', fontSize: '0.9rem' }}>⚠️ รายการตกค้าง ({leftovers.length})</h4>
             <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
               {leftovers.map((item, idx) => (
@@ -256,10 +268,9 @@ function App() {
           </div>
         )}
 
-        {/* --- รายการรถและ Route ย่อย --- */}
-        <h4 style={{ marginTop: '20px', marginBottom: '10px' }}>คิวรถที่จัดได้:</h4>
+        <h4 style={{ marginTop: '20px', marginBottom: '10px', textAlign: 'left' }}>คิวรถที่จัดได้:</h4>
         {routeResults.map(trip => (
-          <div key={trip.id} onClick={() => setActiveTripId(activeTripId === trip.id ? null : trip.id)} style={{ padding: '12px', marginTop: '12px', backgroundColor: '#fff', borderLeft: `6px solid ${trip.color}`, cursor: 'pointer', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+          <div key={trip.id} onClick={() => setActiveTripId(activeTripId === trip.id ? null : trip.id)} style={{ padding: '12px', marginTop: '12px', backgroundColor: '#fff', borderLeft: `6px solid ${trip.color}`, cursor: 'pointer', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', textAlign: 'left' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <b style={{ fontSize: '0.9rem' }}>คันที่ {trip.id}: {trip.vType}</b>
                 <span style={{ fontSize: '0.7rem', padding: '2px 5px', borderRadius: '5px', background: parseFloat(trip.loadFactor) >= 80 ? '#d4edda' : '#eee', color: parseFloat(trip.loadFactor) >= 80 ? '#155724' : '#333' }}>
@@ -270,20 +281,43 @@ function App() {
                 ⚖️ {trip.weight.toLocaleString()} kg | 📦 {trip.cases} ลัง | 📍 {trip.stops} จุด
             </div>
 
-            {/* ส่วนแสดงเส้นทางย่อย (แสดงเมื่อคลิก) */}
             {activeTripId === trip.id && (
-              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #ccc', fontSize: '0.75rem' }}>
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #ccc', fontSize: '0.75rem', textAlign: 'left' }}>
                 <div style={{ color: '#007AFF', marginBottom: '8px', fontWeight: 'bold' }}>📍 รายละเอียดเส้นทาง:</div>
-                {trip.legs.map((leg, idx) => (
-                  <div key={idx} style={{ marginBottom: '6px', paddingLeft: '10px', borderLeft: '1px solid #ddd' }}>
-                    <div style={{ color: '#333' }}>
-                      {idx + 1}. {idx < trip.orderedStops.length ? trip.orderedStops[idx].name : (isRoundTrip ? "กลับบริษัท" : "จุดสุดท้าย")}
+                {trip.legs.map((leg, idx) => {
+                  // หาข้อมูลชื่อสาขาและรายละเอียดสินค้า
+                  const isLastLeg = idx === trip.legs.length - 1;
+                  const stopInfo = trip.orderedStops[idx];
+                  
+                  let displayName = "";
+                  let detailText = "";
+
+                  if (isLastLeg) {
+                    if (isRoundTrip) {
+                        displayName = "กลับบริษัท (จุดเริ่มต้น)";
+                    } else {
+                        // ถ้าไม่ Round trip จุดสุดท้ายของ leg คือ stop สุดท้าย
+                        const lastStop = trip.orderedStops[trip.orderedStops.length - 1];
+                        displayName = lastStop ? lastStop.name : "จุดสุดท้าย";
+                        detailText = lastStop ? `📦 ${lastStop.cases} ลัง | ⚖️ ${lastStop.weight.toLocaleString()} kg` : "";
+                    }
+                  } else {
+                    displayName = stopInfo ? stopInfo.name : `จุดส่งที่ ${idx + 1}`;
+                    detailText = stopInfo ? `📦 ${stopInfo.cases} ลัง | ⚖️ ${stopInfo.weight.toLocaleString()} kg` : "";
+                  }
+
+                  return (
+                    <div key={idx} style={{ marginBottom: '8px', paddingLeft: '10px', borderLeft: '2px solid #ddd' }}>
+                      <div style={{ color: '#333', fontWeight: 'bold' }}>
+                        {idx + 1}. {displayName}
+                      </div>
+                      {detailText && <div style={{ color: '#28a745', fontSize: '0.7rem' }}>{detailText}</div>}
+                      <div style={{ color: '#888', fontSize: '0.7rem' }}>
+                        🚩 ระยะทาง: {leg.distance.text} | 🕒 เวลา: {leg.duration.text}
+                      </div>
                     </div>
-                    <div style={{ color: '#888', fontSize: '0.7rem' }}>
-                      🚩 {leg.distance.text} | 🕒 {leg.duration.text}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
