@@ -40,12 +40,20 @@ function App() {
   const [selectedDate, setSelectedDate] = useState<string>('');
   
   const [originAddress, setOriginAddress] = useState<string>('บริษัท อำพลฟูดส์ โพรเซสซิ่ง จำกัด');
+  
+  // --- Limits ---
   const [maxWeight, setMaxWeight] = useState<number>(3000); 
+  const [maxCases, setMaxCases] = useState<number>(500); 
   const [maxStops, setMaxStops] = useState<number>(20);
+  const [maxFleet, setMaxFleet] = useState<number>(10); // <--- New: จำนวนรถที่มีจำกัด
   const [isRoundTrip, setIsRoundTrip] = useState<boolean>(true); 
   
   const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
+  
+  // Results
   const [routeResults, setRouteResults] = useState<any[]>([]); 
+  const [leftovers, setLeftovers] = useState<any[]>([]); // <--- New: เก็บของที่เหลือ
+
   const [depotPos, setDepotPos] = useState<any>(null); 
   const [activeTripId, setActiveTripId] = useState<number | null>(null); 
   const [errorMsg, setErrorMsg] = useState<string>('');
@@ -100,6 +108,7 @@ function App() {
       province: row['Province'] || '',
       district: row['District'] || '',
       weight: parseFloat(row['#Kg.'] || '0'),
+      cases: parseFloat(row['#Case'] || '0'),
       lat: null, 
       lng: null, 
       raw: row
@@ -107,6 +116,7 @@ function App() {
 
     setFilteredOrders(formatted);
     setRouteResults([]); 
+    setLeftovers([]); // Clear leftovers
     setDepotPos(null);
     setActiveTripId(null);
     setErrorMsg('');
@@ -166,6 +176,7 @@ function App() {
 
     setIsCalculating(true);
     setRouteResults([]);
+    setLeftovers([]);
     setActiveTripId(null);
     setErrorMsg('');
 
@@ -179,19 +190,31 @@ function App() {
     let depotLng = depotPos ? depotPos.lng : 100.5018;
 
     while (unassigned.length > 0) {
-        let currentVehicle: any = { orders: [], weight: 0 };
+        // --- Check Fleet Limit ---
+        if (vehicles.length >= maxFleet) {
+            // รถหมดแล้ว! ที่เหลือคือ Leftovers
+            break; 
+        }
+
+        let currentVehicle: any = { orders: [], weight: 0, cases: 0 };
         let currentLat = depotLat;
         let currentLng = depotLng;
         let currentProvince: string | null = null;
 
         while (true) {
+            // Filter 1: Check Constraints
             let candidates = unassigned.filter((o: any) => {
                 const newWeight = Number((currentVehicle.weight + o.weight).toFixed(2));
-                return newWeight <= maxWeight && currentVehicle.orders.length < LIMIT_PER_TRIP;
+                const newCases = Number((currentVehicle.cases + o.cases).toFixed(2));
+                
+                return newWeight <= maxWeight 
+                    && newCases <= maxCases 
+                    && currentVehicle.orders.length < LIMIT_PER_TRIP;
             });
 
             if (candidates.length === 0) break; 
 
+            // Filter 2: Province Priority
             if (currentProvince) {
                 const sameProvCandidates = candidates.filter((o: any) => o.province === currentProvince);
                 if (sameProvCandidates.length > 0) {
@@ -201,6 +224,7 @@ function App() {
                 }
             }
 
+            // Filter 3: Nearest Neighbor
             candidates.sort((a: any, b: any) => {
                 const distA = getDistanceFromLatLonInKm(currentLat, currentLng, a.lat || depotLat, a.lng || depotLng);
                 const distB = getDistanceFromLatLonInKm(currentLat, currentLng, b.lat || depotLat, b.lng || depotLng);
@@ -215,6 +239,7 @@ function App() {
 
             currentVehicle.orders.push(best);
             currentVehicle.weight += best.weight;
+            currentVehicle.cases += best.cases;
             
             if (best.lat) {
                 currentLat = best.lat;
@@ -231,15 +256,29 @@ function App() {
         if (currentVehicle.orders.length > 0) {
             vehicles.push(currentVehicle);
         } else {
-            if (unassigned.length > 0) {
+            // กรณีไม่มีของใส่ได้เลยในรอบนี้ (อาจจะ Oversize หรือเงื่อนไขไม่ผ่าน)
+            // ถ้ายังมีโควตารถเหลือ ก็เปิดรถใหม่มารับ Oversize ได้
+            if (unassigned.length > 0 && vehicles.length < maxFleet) {
                 const stuck = unassigned.shift();
                 if (stuck) {
-                  vehicles.push({ orders: [stuck], weight: stuck.weight, isOversized: true });
+                  vehicles.push({ 
+                      orders: [stuck], 
+                      weight: stuck.weight, 
+                      cases: stuck.cases, 
+                      isOversized: true 
+                  });
                 }
+            } else {
+                // รถเต็มแล้ว หรือยัดไม่ลงจริงๆ -> หลุด Loop ไปเป็น Leftovers
+                break;
             }
         }
     }
 
+    // --- ส่วนที่เหลือใน unassigned คือ Leftovers ---
+    setLeftovers(unassigned);
+
+    // --- Process Routing for Valid Vehicles ---
     try {
       const results: any[] = [];
       let foundDepot: any = null;
@@ -302,16 +341,22 @@ function App() {
                   id: i + 1,
                   data: resultData,
                   weight: vehicle.weight,
+                  cases: vehicle.cases,
                   orderCount: vehicle.orders.length,
                   distanceKm: distKm.toFixed(1),
                   firstDrop: vehicle.orders[0].district, 
-                  isOversized: !!vehicle.isOversized || (vehicle.weight > maxWeight),
+                  isOversized: !!vehicle.isOversized || (vehicle.weight > maxWeight) || (vehicle.cases > maxCases),
                   orderedStops: orderedStops,
                   legs: legs, 
                   color: routeColors[i % routeColors.length]
                 });
             } else {
                console.warn("No routes found for vehicle " + (i+1));
+               // Fallback: ยังนับเป็นรถ แต่ไม่มีเส้นทาง
+               results.push({
+                   id: i+1, data: null, weight: vehicle.weight, cases: vehicle.cases, orderCount: vehicle.orders.length,
+                   distanceKm: "N/A", firstDrop: vehicle.orders[0].district, isOversized: true, orderedStops: vehicle.orders, legs: [], color: "#999"
+               });
             }
 
         } catch (err) {
@@ -321,7 +366,7 @@ function App() {
 
       setRouteResults(results);
       if (foundDepot) setDepotPos(foundDepot);
-      setStatusMsg(`จัดเส้นทางเสร็จสิ้น! ได้ทั้งหมด ${results.length} เที่ยว`);
+      setStatusMsg(`จัดเส้นทางเสร็จสิ้น! ได้ ${results.length} คัน (ตกค้าง ${unassigned.length} รายการ)`);
 
     } catch (error: any) {
       console.error("Routing Error:", error);
@@ -331,16 +376,11 @@ function App() {
     }
   }
 
-  // --- New Function: Export to Excel ---
   const handleExportExcel = () => {
-    if (routeResults.length === 0) return;
-
-    // Flatten data: แปลงโครงสร้างจาก Trip -> Stops ให้เป็น Row เดียวกันหมด
+    // 1. Sheet: Route Plan
     const exportData: any[] = [];
-
     routeResults.forEach((trip) => {
         trip.orderedStops.forEach((stop: any, index: number) => {
-            // ดึงข้อมูล Original (raw) มาใส่ด้วยถ้าต้องการ
             exportData.push({
                 "Trip No": trip.id,
                 "Stop Seq": index + 1,
@@ -348,21 +388,40 @@ function App() {
                 "Ship-to Name": stop.name,
                 "Address": stop.address,
                 "Province": stop.province,
-                "District": stop.district,
                 "Weight (kg)": stop.weight,
+                "Case": stop.cases,
                 "Distance From Prev": trip.legs[index]?.distance?.text || "Start",
-                // ถ้าอยากได้ฟิลด์อื่นจาก Excel ต้นฉบับ
-                // "Order ID": stop.raw?.['Order No'] || "", 
             });
         });
     });
 
-    // Create Worksheet & Workbook
-    const ws = XLSX.utils.json_to_sheet(exportData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Route Plan");
+    // 2. Sheet: Leftovers
+    const leftoverData = leftovers.map((item, index) => ({
+        "No": index + 1,
+        "Date": selectedDate,
+        "Ship-to Name": item.name,
+        "Address": item.address,
+        "Province": item.province,
+        "Weight (kg)": item.weight,
+        "Case": item.cases,
+        "Reason": "Fleet limit reached / Oversized / Constraint"
+    }));
 
-    // Save File
+    // Create Workbook
+    const wb = XLSX.utils.book_new();
+    
+    // Append Sheet 1
+    if (exportData.length > 0) {
+        const ws1 = XLSX.utils.json_to_sheet(exportData);
+        XLSX.utils.book_append_sheet(wb, ws1, "Route Plan");
+    }
+
+    // Append Sheet 2 (ถ้ามีของเหลือ)
+    if (leftoverData.length > 0) {
+        const ws2 = XLSX.utils.json_to_sheet(leftoverData);
+        XLSX.utils.book_append_sheet(wb, ws2, "Leftovers (ตกค้าง)");
+    }
+
     XLSX.writeFile(wb, `Delivery_Plan_${selectedDate}.xlsx`);
   };
 
@@ -380,9 +439,19 @@ function App() {
           <div style={{ padding: '15px', borderLeft: `5px solid ${trip.color}`, backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
             <h3 style={{ margin: '0 0 10px 0' }}>🚛 รถคันที่ {trip.id}</h3>
             <div style={{ fontSize: '0.9rem' }}><b>ระยะทางรวม:</b> {trip.distanceKm} km</div>
-            <div style={{ fontSize: '0.9rem', marginBottom:'15px' }}><b>นน.รวม:</b> {trip.weight.toLocaleString()} kg</div>
             
-            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '5px' }}>ลำดับการวิ่ง (Sequence)</h4>
+            <div style={{ fontSize: '0.9rem', marginTop:'10px', padding:'10px', backgroundColor:'#f9f9f9', borderRadius:'5px' }}>
+                <div style={{display:'flex', justifyContent:'space-between'}}>
+                    <span>⚖️ นน.: {trip.weight.toLocaleString()} / {maxWeight} kg</span>
+                    <span style={{color:'green', fontWeight:'bold'}}>ว่าง: {(maxWeight - trip.weight).toLocaleString()}</span>
+                </div>
+                <div style={{display:'flex', justifyContent:'space-between'}}>
+                    <span>📦 Case: {trip.cases.toLocaleString()} / {maxCases}</span>
+                    <span style={{color:'green', fontWeight:'bold'}}>ว่าง: {(maxCases - trip.cases).toLocaleString()}</span>
+                </div>
+            </div>
+            
+            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '5px', marginTop: '15px' }}>ลำดับการวิ่ง (Sequence)</h4>
             <ul style={{ paddingLeft: '0', listStyle: 'none', fontSize: '0.9rem', textAlign: 'left' }}>
               <li style={{ padding: '10px 0', borderBottom: '1px dashed #eee', display: 'flex', gap: '10px' }}>
                 <span style={{ fontWeight: 'bold', color: 'white', backgroundColor: '#d35400', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', flexShrink: 0 }}>A</span>
@@ -404,21 +473,13 @@ function App() {
                           <span style={{ fontSize: '0.75rem', color: '#0088FF', whiteSpace:'nowrap' }}>{distanceText}</span>
                       </div>
                       <div style={{ fontSize: '0.8rem', color: '#666' }}>{stop.district}, {stop.province}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#27ae60' }}>📦 {stop.weight} kg</div>
+                      <div style={{ fontSize: '0.75rem', color: '#27ae60' }}>
+                          ⚖️ {stop.weight} kg | 📦 {stop.cases} cs
+                      </div>
                     </div>
                   </li>
                 );
               })}
-              {isRoundTrip ? (
-                  <li style={{ padding: '10px 0', display: 'flex', gap: '10px' }}>
-                     <span style={{ fontWeight: 'bold', color: 'white', backgroundColor: '#d35400', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', flexShrink: 0 }}>{getLetter(trip.orderedStops.length + 1)}</span>
-                    <div><div style={{ fontWeight: 'bold', color: '#d35400' }}>กลับคลังสินค้า</div><div style={{ fontSize: '0.8rem', color: '#0088FF' }}>{trip.legs[trip.legs.length - 1]?.distance?.text ? `(+ ${trip.legs[trip.legs.length - 1].distance?.text})` : ''}</div></div>
-                  </li>
-              ) : (
-                  <li style={{ padding: '10px 0', display: 'flex', gap: '10px', opacity: 0.5 }}>
-                    <div style={{ fontSize: '0.85rem', fontStyle: 'italic' }}>⛔ จบงานที่ลูกค้าคนสุดท้าย (ไม่กลับคลัง)</div>
-                  </li>
-              )}
             </ul>
           </div>
         </div>
@@ -437,9 +498,7 @@ function App() {
 
             {allData.length > 0 && (
             <>
-                {/* Geocode Button */}
                 <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#fff8e1', borderRadius: '6px', border: '1px solid #ffe082' }}>
-                    <div style={{fontSize:'0.85rem', marginBottom:'5px', fontWeight:'bold', color:'#f57f17'}}>ขั้นแรก: ต้องหาพิกัดก่อน</div>
                     <button 
                         onClick={geocodeOrders} 
                         disabled={isGeocoding || filteredOrders.some((o: any) => o.lat)}
@@ -460,7 +519,15 @@ function App() {
                       <input type="number" value={maxWeight} onChange={(e) => setMaxWeight(Number(e.target.value))} style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', boxSizing:'border-box'}} />
                   </div>
                   <div style={{ marginBottom: '10px' }}>
-                      <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>4. จุดส่งสูงสุด</label>
+                      <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>4. รับ Case</label>
+                      <input type="number" value={maxCases} onChange={(e) => setMaxCases(Number(e.target.value))} style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', boxSizing:'border-box'}} />
+                  </div>
+                  <div style={{ marginBottom: '10px' }}>
+                      <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>5. จำนวนรถ (คัน)</label>
+                      <input type="number" value={maxFleet} onChange={(e) => setMaxFleet(Number(e.target.value))} style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', boxSizing:'border-box'}} />
+                  </div>
+                  <div style={{ marginBottom: '10px' }}>
+                      <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>6. จุดส่งสูงสุด</label>
                       <input type="number" value={maxStops} onChange={(e) => setMaxStops(Number(e.target.value))} min="1" max="23" style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', boxSizing:'border-box'}} />
                   </div>
                 </div>
@@ -473,24 +540,33 @@ function App() {
                 </div>
 
                 <div style={{ marginBottom: '15px' }}>
-                    <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>5. เลือกวันที่</label>
+                    <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>7. เลือกวันที่</label>
                     <select value={selectedDate} onChange={(e) => handleDateChange(e.target.value)} style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', backgroundColor:'#fff'}}>
                         {availableDates.map(d => <option key={d} value={d}>{d}</option>)}
                     </select>
                 </div>
 
                 <button onClick={calculateRoute} disabled={isCalculating || isGeocoding || filteredOrders.length === 0} style={{ width: '100%', padding: '12px', backgroundColor: isCalculating ? '#bdc3c7' : '#27ae60', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>
-                    {isCalculating ? 'กำลังประมวลผล...' : '2. เริ่มจัดเส้นทาง 🚀'}
+                    {isCalculating ? 'กำลังประมวลผล...' : '3. เริ่มจัดเส้นทาง 🚀'}
                 </button>
             </>
             )}
         </div>
 
         {errorMsg && <div style={{ color: '#c0392b', marginBottom: '20px', padding: '10px', backgroundColor: '#fadbd8', borderRadius: '6px' }}>{errorMsg}</div>}
+        
+        {/* Leftover Alert */}
+        {leftovers.length > 0 && (
+            <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#fdeded', borderRadius: '8px', border: '1px solid #f5c6cb' }}>
+                <h3 style={{ color: '#721c24', margin: '0 0 10px 0' }}>⚠️ มีสินค้าตกค้าง: {leftovers.length} รายการ</h3>
+                <div style={{ fontSize: '0.85rem', color: '#721c24' }}>
+                   สินค้าเหล่านี้ไม่ถูกจัดลงรถ เนื่องจากรถเต็ม (เกิน {maxFleet} คัน) หรือเงื่อนไขอื่นๆ กรุณาดูรายละเอียดในไฟล์ Export (Sheet: Leftovers)
+                </div>
+            </div>
+        )}
 
         {routeResults.length > 0 && (
             <div>
-                {/* ปุ่ม Export อยู่ตรงนี้ */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', padding: '10px', backgroundColor: '#e8f6f3', borderRadius: '6px', border: '1px solid #a2d9ce' }}>
                     <b style={{color: '#16a085'}}>สรุป: {routeResults.length} คัน</b>
                     <button 
@@ -504,7 +580,11 @@ function App() {
                 {routeResults.map((trip: any) => (
                     <div key={trip.id} onClick={() => setActiveTripId(trip.id)} style={{ marginBottom: '12px', padding: '15px', backgroundColor: 'white', borderRadius: '8px', borderLeft: `6px solid ${trip.color}`, boxShadow: '0 2px 4px rgba(0,0,0,0.05)', cursor: 'pointer' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom:'6px' }}><b style={{ color: '#2c3e50' }}>รถคันที่ {trip.id} {trip.isOversized && '⚠️'}</b><span style={{ fontSize: '0.8rem', padding: '3px 8px', borderRadius: '12px', backgroundColor: '#f0f2f5' }}>{trip.distanceKm} km</span></div>
-                        <div style={{ fontSize: '0.85rem', color:'#555' }}>📍 โซน: <b>{trip.firstDrop}</b> ...</div>
+                        <div style={{ fontSize: '0.85rem', color:'#555', marginBottom:'5px' }}>📍 โซน: <b>{trip.firstDrop}</b> ...</div>
+                        
+                        <div style={{fontSize:'0.8rem', color:'#777'}}>
+                           เหลือเศษ: <b>{(maxWeight - trip.weight).toLocaleString()} kg</b> | <b>{(maxCases - trip.cases).toLocaleString()} cs</b>
+                        </div>
                     </div>
                 ))}
             </div>
