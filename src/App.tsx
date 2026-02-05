@@ -55,7 +55,8 @@ function App() {
 
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
-    googleMapsApiKey: "AIzaSyA1xq72aZlW3-opcXu8M6DDM-6FodaKKCU", // <--- API Key
+  // ใช้ import.meta.env.... แทนการใส่ string ตรงๆ
+googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
     libraries: ['places'] 
   });
 
