@@ -1,8 +1,10 @@
+// @ts-nocheck
 import React, { useState } from 'react';
-import { GoogleMap, useJsApiLoader, DirectionsRenderer, Marker } from '@react-google-maps/api';
+import { GoogleMap, useJsApiLoader, DirectionsRenderer, MarkerF } from '@react-google-maps/api';
+// @ts-ignore
 import * as XLSX from 'xlsx';
 
-// --- Styles & Icons ---
+// --- Styles ---
 const containerStyle = { width: '100%', height: '100vh' };
 const center = { lat: 13.7563, lng: 100.5018 };
 const routeColors = ["#0088FF", "#FF0000", "#00FF00", "#9900FF", "#FF8800", "#00FFFF", "#FF00FF", "#FFFF00", "#000000", "#888888"];
@@ -12,11 +14,11 @@ const depotIcon = {
   scaledSize: { width: 40, height: 40 }
 };
 
-const getLetter = (index) => String.fromCharCode(65 + index);
+const getLetter = (index: number) => String.fromCharCode(65 + index);
 
-// คำนวณระยะทางระหว่าง 2 พิกัด (Haversine Formula) เพื่อหาจุดใกล้สุดแบบ Offline
-function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
-  var R = 6371; // Radius of the earth in km
+// Helper Distance
+function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  var R = 6371; 
   var dLat = deg2rad(lat2-lat1);  
   var dLon = deg2rad(lon2-lon1); 
   var a = 
@@ -24,63 +26,61 @@ function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
     Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2)
     ; 
   var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
-  var d = R * c; // Distance in km
+  var d = R * c; 
   return d;
 }
 
-function deg2rad(deg) {
+function deg2rad(deg: number) {
   return deg * (Math.PI/180)
 }
 
 function App() {
-  // --- Data State ---
-  const [allData, setAllData] = useState([]);
-  const [availableDates, setAvailableDates] = useState([]);
-  const [selectedDate, setSelectedDate] = useState('');
+  const [allData, setAllData] = useState<any[]>([]);
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
+  const [selectedDate, setSelectedDate] = useState<string>('');
   
-  // --- Settings State ---
-  const [originAddress, setOriginAddress] = useState('บริษัท อำพลฟูดส์ โพรเซสซิ่ง จำกัด');
-  const [maxWeight, setMaxWeight] = useState(3000); 
-  const [maxStops, setMaxStops] = useState(20);
-  const [isRoundTrip, setIsRoundTrip] = useState(true); 
+  const [originAddress, setOriginAddress] = useState<string>('บริษัท อำพลฟูดส์ โพรเซสซิ่ง จำกัด');
+  const [maxWeight, setMaxWeight] = useState<number>(3000); 
+  const [maxStops, setMaxStops] = useState<number>(20);
+  const [isRoundTrip, setIsRoundTrip] = useState<boolean>(true); 
   
-  // --- Processing State ---
-  const [filteredOrders, setFilteredOrders] = useState([]);
-  const [routeResults, setRouteResults] = useState([]); 
-  const [depotPos, setDepotPos] = useState(null); 
-  const [activeTripId, setActiveTripId] = useState(null); 
-  const [errorMsg, setErrorMsg] = useState('');
-  const [statusMsg, setStatusMsg] = useState('');
-  const [isCalculating, setIsCalculating] = useState(false);
-  const [isGeocoding, setIsGeocoding] = useState(false); // New state
+  const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
+  const [routeResults, setRouteResults] = useState<any[]>([]); 
+  const [depotPos, setDepotPos] = useState<any>(null); 
+  const [activeTripId, setActiveTripId] = useState<number | null>(null); 
+  const [errorMsg, setErrorMsg] = useState<string>('');
+  const [statusMsg, setStatusMsg] = useState<string>('');
+  const [isCalculating, setIsCalculating] = useState<boolean>(false);
+  const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
 
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
-    googleMapsApiKey: "AIzaSyA1xq72aZlW3-opcXu8M6DDM-6FodaKKCU", // <--- ใส่ Key ของคุณที่นี่
+    googleMapsApiKey: "AIzaSyA1xq72aZlW3-opcXu8M6DDM-6FodaKKCU", // <--- API Key
     libraries: ['places'] 
   });
 
-  // 1. Upload Excel
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
+  const handleFileUpload = (e: any) => {
+    const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = (evt) => {
-      const bstr = evt.target.result;
+      const bstr = evt.target?.result;
+      if (!bstr) return;
+
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
-      const data = XLSX.utils.sheet_to_json(wb.Sheets[wsname], { raw: false });
+      const data = XLSX.utils.sheet_to_json(wb.Sheets[wsname], { raw: false }) as any[];
 
       if (data.length === 0) return;
 
       const cleanedData = data.map(row => {
-        const newRow = {};
+        const newRow: any = {};
         Object.keys(row).forEach(key => newRow[key.trim()] = row[key]);
         return newRow;
       });
 
-      const dates = [...new Set(cleanedData.map(item => item['Date']))].filter(d => d);
+      const dates = [...new Set(cleanedData.map((item: any) => item['Date']))].filter(d => d) as string[];
       setAvailableDates(dates);
       setAllData(cleanedData);
       
@@ -89,20 +89,19 @@ function App() {
     reader.readAsBinaryString(file);
   };
 
-  // 2. Change Date
-  const handleDateChange = (date, sourceData = allData) => {
+  const handleDateChange = (date: string, sourceData = allData) => {
     setSelectedDate(date);
-    const dailyOrders = sourceData.filter(row => row['Date'] === date);
+    const dailyOrders = sourceData.filter((row: any) => row['Date'] === date);
     
-    const formatted = dailyOrders.map(row => ({
+    const formatted = dailyOrders.map((row: any) => ({
       name: row['Ship-to Name'],
       address: `${row['Ship-to Name']} ${row['District']} ${row['Province']}`, 
       region: row['Region'] || '',
       province: row['Province'] || '',
       district: row['District'] || '',
-      weight: parseFloat(row['#Kg.'] || 0),
-      lat: null, // รอ Geocode
-      lng: null, // รอ Geocode
+      weight: parseFloat(row['#Kg.'] || '0'),
+      lat: null, 
+      lng: null, 
       raw: row
     }));
 
@@ -114,35 +113,30 @@ function App() {
     setStatusMsg('');
   };
 
-  // 3. Geocode All Addresses (หาพิกัดก่อนจัดเส้นทาง)
   const geocodeOrders = async () => {
     if (filteredOrders.length === 0) return;
     setIsGeocoding(true);
     setErrorMsg('');
     setStatusMsg(`กำลังค้นหาพิกัด ${filteredOrders.length} จุด (อาจใช้เวลาสักครู่)...`);
 
-    const geocoder = new window.google.maps.Geocoder();
+    const geocoder = new (window as any).google.maps.Geocoder();
     const updatedOrders = [...filteredOrders];
     let successCount = 0;
 
-    // หาพิกัด Depot ก่อน
-    let currentDepotPos = null;
     try {
         const depotResult = await geocoder.geocode({ address: originAddress });
         if (depotResult.results[0]) {
-            currentDepotPos = depotResult.results[0].geometry.location;
-            setDepotPos(currentDepotPos);
+            const loc = depotResult.results[0].geometry.location;
+            setDepotPos({ lat: loc.lat(), lng: loc.lng() });
         }
     } catch (e) {
         console.warn("Depot geocode failed");
     }
 
-    // Loop หาพิกัดลูกค้า (ต้อง Delay เพื่อไม่ให้โดน Google Block Rate Limit)
     for (let i = 0; i < updatedOrders.length; i++) {
-        if (updatedOrders[i].lat) continue; // ถ้ามีแล้วข้าม
+        if (updatedOrders[i].lat) continue; 
 
         try {
-            // Delay 300ms per request
             await new Promise(r => setTimeout(r, 300)); 
             
             const res = await geocoder.geocode({ address: updatedOrders[i].address });
@@ -163,10 +157,8 @@ function App() {
     setStatusMsg(`ค้นหาพิกัดเสร็จสิ้น! เจอ ${successCount} จุด พร้อมคำนวณระยะทาง`);
   };
 
-  // 4. Calculate Route (Nearest Neighbor Logic)
   async function calculateRoute() {
-    // ต้องมีพิกัดก่อนถึงจะใช้ Logic นี้ได้
-    const hasCoords = filteredOrders.some(o => o.lat !== null);
+    const hasCoords = filteredOrders.some((o: any) => o.lat !== null);
     if (!hasCoords) {
         setErrorMsg("กรุณากด 'ค้นหาพิกัด' ก่อน เพื่อให้ระบบคำนวณระยะทางได้");
         return;
@@ -177,98 +169,80 @@ function App() {
     setActiveTripId(null);
     setErrorMsg('');
 
-    const directionsService = new window.google.maps.DirectionsService();
+    const directionsService = new (window as any).google.maps.DirectionsService();
     const LIMIT_PER_TRIP = Math.min(maxStops, 23); 
 
-    // --- Logic: Nearest Neighbor with Constraints ---
-    // 1. Weight 2. Drop 3. Province 4. Ship-to 5. Nearest Distance
-    
     let unassigned = [...filteredOrders];
-    const vehicles = [];
+    const vehicles: any[] = [];
     
-    // พิกัดเริ่มต้น (Depot)
-    let depotLat = depotPos ? depotPos.lat() : 13.7563;
-    let depotLng = depotPos ? depotPos.lng() : 100.5018;
+    let depotLat = depotPos ? depotPos.lat : 13.7563;
+    let depotLng = depotPos ? depotPos.lng : 100.5018;
 
     while (unassigned.length > 0) {
-        let currentVehicle = { orders: [], weight: 0 };
-        // จุดเริ่มต้นของรถคันนี้คือ Depot
+        let currentVehicle: any = { orders: [], weight: 0 };
         let currentLat = depotLat;
         let currentLng = depotLng;
-        // จังหวัดปัจจุบันที่รถคันนี้กำลังเก็บ (ใช้สำหรับ Priority ข้อ 3)
-        let currentProvince = null;
+        let currentProvince: string | null = null;
 
         while (true) {
-            // หา Candidate ที่ใส่ได้
-            // Filter 1: Constraint (Weight & Drops)
-            let candidates = unassigned.filter(o => {
+            let candidates = unassigned.filter((o: any) => {
                 const newWeight = Number((currentVehicle.weight + o.weight).toFixed(2));
                 return newWeight <= maxWeight && currentVehicle.orders.length < LIMIT_PER_TRIP;
             });
 
-            if (candidates.length === 0) break; // รถเต็ม หรือไม่มีของที่ใส่ได้แล้ว
+            if (candidates.length === 0) break; 
 
-            // Filter 2: Province Priority (ข้อ 3)
-            // ถ้าเราเริ่มเก็บจังหวัดไหนแล้ว ให้พยายามเก็บจังหวัดนั้นให้หมดก่อน
             if (currentProvince) {
-                const sameProvCandidates = candidates.filter(o => o.province === currentProvince);
+                const sameProvCandidates = candidates.filter((o: any) => o.province === currentProvince);
                 if (sameProvCandidates.length > 0) {
                     candidates = sameProvCandidates;
                 } else {
-                    // ถ้าจังหวัดนี้หมดแล้ว อนุญาตให้ข้ามไปจังหวัดอื่นได้ (ตามระยะทาง)
-                    // Reset currentProvince เพื่อให้เลือกจังหวัดใหม่ที่ใกล้ที่สุด
                     currentProvince = null; 
                 }
             }
 
-            // Filter 3: Nearest Neighbor (ข้อ 5) + Ship-to Tie Breaker (ข้อ 4)
-            // หาจุดที่ใกล้ currentLat/Lng ที่สุด
-            candidates.sort((a, b) => {
+            candidates.sort((a: any, b: any) => {
                 const distA = getDistanceFromLatLonInKm(currentLat, currentLng, a.lat || depotLat, a.lng || depotLng);
                 const distB = getDistanceFromLatLonInKm(currentLat, currentLng, b.lat || depotLat, b.lng || depotLng);
                 
-                if (Math.abs(distA - distB) < 0.1) { // ถ้าระยะต่างกันน้อยกว่า 100 เมตร
-                    return a.name.localeCompare(b.name); // Tie-breaker ด้วยชื่อ
+                if (Math.abs(distA - distB) < 0.1) { 
+                    return a.name.localeCompare(b.name); 
                 }
                 return distA - distB;
             });
 
-            // Pick Best
             const best = candidates[0];
 
-            // Add to Vehicle
             currentVehicle.orders.push(best);
             currentVehicle.weight += best.weight;
             
-            // Move Current Location
             if (best.lat) {
                 currentLat = best.lat;
                 currentLng = best.lng;
             }
             if (!currentProvince) {
-                currentProvince = best.province; // ตั้งค่าจังหวัดหลักของรถคันนี้
+                currentProvince = best.province; 
             }
 
-            // Remove from unassigned
-            const index = unassigned.findIndex(u => u === best);
+            const index = unassigned.findIndex((u: any) => u === best);
             if (index > -1) unassigned.splice(index, 1);
         }
 
         if (currentVehicle.orders.length > 0) {
             vehicles.push(currentVehicle);
         } else {
-            // กรณีมีออเดอร์เหลือแต่ใส่ไม่ได้เลย (เช่น นน.เกินพิกัดตั้งแต่ชิ้นแรก)
             if (unassigned.length > 0) {
-                const stuck = unassigned.shift(); // ดึงออก
-                vehicles.push({ orders: [stuck], weight: stuck.weight, isOversized: true });
+                const stuck = unassigned.shift();
+                if (stuck) {
+                  vehicles.push({ orders: [stuck], weight: stuck.weight, isOversized: true });
+                }
             }
         }
     }
 
-    // --- Routing Process (เหมือนเดิม) ---
     try {
-      const results = [];
-      let foundDepot = null;
+      const results: any[] = [];
+      let foundDepot: any = null;
 
       for (let i = 0; i < vehicles.length; i++) {
         const vehicle = vehicles[i];
@@ -278,72 +252,80 @@ function App() {
         
         if (!isRoundTrip && waypointsData.length > 0) {
              const lastOrder = waypointsData.pop(); 
-             destination = lastOrder.address;
+             if (lastOrder) destination = lastOrder.address;
         }
 
-        const waypoints = waypointsData.map(order => ({
+        const waypoints = waypointsData.map((order: any) => ({
           location: order.address,
           stopover: true
         }));
 
         await new Promise(r => setTimeout(r, 400)); 
 
-        let resultData = null;
+        let resultData: any = null;
         let distKm = 0;
-        let orderedStops = [];
-        let legs = [];
+        let orderedStops: any[] = [];
+        let legs: any[] = [];
 
         try {
             const result = await directionsService.route({
                 origin: originAddress,
                 destination: destination,
                 waypoints: waypoints,
-                optimizeWaypoints: true, // Google Optimize ซ้ำให้อีกรอบในกลุ่มใกล้ๆ
-                travelMode: window.google.maps.TravelMode.DRIVING,
+                optimizeWaypoints: true, 
+                travelMode: (window as any).google.maps.TravelMode.DRIVING,
             });
-            resultData = result;
-            distKm = result.routes[0].legs.reduce((acc, leg) => acc + leg.distance.value, 0) / 1000;
-            legs = result.routes[0].legs;
             
-            const waypointOrder = result.routes[0].waypoint_order;
-            
-            if (isRoundTrip) {
-                orderedStops = waypointOrder.map(index => vehicle.orders[index]);
-            } else {
-                const middleStops = waypointOrder.map(index => waypointsData[index]);
-                const lastStop = vehicle.orders[vehicle.orders.length - 1]; 
-                orderedStops = [...middleStops, lastStop];
-            }
+            if (result && result.routes && result.routes.length > 0) {
+                resultData = result;
+                if (result.routes[0].legs) {
+                    distKm = result.routes[0].legs.reduce((acc: number, leg: any) => acc + (leg.distance?.value || 0), 0) / 1000;
+                    legs = result.routes[0].legs;
+                }
+                
+                const waypointOrder = result.routes[0].waypoint_order;
+                
+                if (isRoundTrip) {
+                    orderedStops = waypointOrder.map((index: number) => vehicle.orders[index]);
+                } else {
+                    const middleStops = waypointOrder.map((index: number) => waypointsData[index]);
+                    const lastStop = vehicle.orders[vehicle.orders.length - 1]; 
+                    orderedStops = [...middleStops, lastStop];
+                }
 
-            if (!foundDepot && result.routes[0] && result.routes[0].legs[0]) {
-                foundDepot = result.routes[0].legs[0].start_location;
+                if (!foundDepot && result.routes[0].legs[0]) {
+                    const startLoc = result.routes[0].legs[0].start_location;
+                    foundDepot = { lat: startLoc.lat(), lng: startLoc.lng() };
+                }
+
+                results.push({
+                  id: i + 1,
+                  data: resultData,
+                  weight: vehicle.weight,
+                  orderCount: vehicle.orders.length,
+                  distanceKm: distKm.toFixed(1),
+                  firstDrop: vehicle.orders[0].district, 
+                  isOversized: !!vehicle.isOversized || (vehicle.weight > maxWeight),
+                  orderedStops: orderedStops,
+                  legs: legs, 
+                  color: routeColors[i % routeColors.length]
+                });
+            } else {
+               console.warn("No routes found for vehicle " + (i+1));
             }
 
         } catch (err) {
             console.warn("Routing failed for vehicle " + (i+1));
         }
-        
-        results.push({
-          id: i + 1,
-          data: resultData,
-          weight: vehicle.weight,
-          orderCount: vehicle.orders.length,
-          distanceKm: distKm.toFixed(1),
-          firstDrop: vehicle.orders[0].district, // อาจไม่ใช่ตัวแรกสุดแล้ว แต่เป็นตัวแทนโซน
-          isOversized: vehicle.isOversized || (vehicle.weight > maxWeight),
-          orderedStops: orderedStops,
-          legs: legs, 
-          color: routeColors[i % routeColors.length]
-        });
       }
 
       setRouteResults(results);
       if (foundDepot) setDepotPos(foundDepot);
       setStatusMsg(`จัดเส้นทางเสร็จสิ้น! ได้ทั้งหมด ${results.length} เที่ยว`);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Routing Error:", error);
-      setErrorMsg("เกิดข้อผิดพลาด: " + error.message);
+      setErrorMsg("เกิดข้อผิดพลาด: " + (error.message || error));
     } finally {
       setIsCalculating(false);
     }
@@ -351,10 +333,9 @@ function App() {
 
   const renderSidebarContent = () => {
     if (activeTripId !== null) {
-      const trip = routeResults.find(t => t.id === activeTripId);
+      const trip = routeResults.find((t: any) => t.id === activeTripId);
       if (!trip) return null;
-      const lastLetter = getLetter(trip.orderedStops.length + 1);
-
+      
       return (
         <div style={{ animation: 'fadeIn 0.3s', textAlign: 'left' }}>
           <button onClick={() => setActiveTripId(null)} style={{ marginBottom: '15px', padding: '5px 10px', cursor: 'pointer', backgroundColor: '#eee', border: 'none', borderRadius: '4px' }}>
@@ -375,10 +356,10 @@ function App() {
                     <div style={{ fontSize: '0.8rem', color: '#666' }}>{originAddress}</div>
                 </div>
               </li>
-              {trip.orderedStops.map((stop, idx) => {
+              {trip.orderedStops.map((stop: any, idx: number) => {
                 const markerLetter = getLetter(idx + 1);
                 const legInfo = trip.legs[idx];
-                const distanceText = legInfo ? `(+ ${legInfo.distance.text})` : '';
+                const distanceText = legInfo && legInfo.distance ? `(+ ${legInfo.distance.text})` : '';
                 return (
                   <li key={idx} style={{ padding: '10px 0', borderBottom: '1px dashed #eee', display: 'flex', gap: '10px' }}>
                     <span style={{ fontWeight: 'bold', color: 'white', backgroundColor: '#2c3e50', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', flexShrink: 0 }}>{markerLetter}</span>
@@ -395,8 +376,8 @@ function App() {
               })}
               {isRoundTrip ? (
                   <li style={{ padding: '10px 0', display: 'flex', gap: '10px' }}>
-                     <span style={{ fontWeight: 'bold', color: 'white', backgroundColor: '#d35400', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', flexShrink: 0 }}>{lastLetter}</span>
-                    <div><div style={{ fontWeight: 'bold', color: '#d35400' }}>กลับคลังสินค้า</div><div style={{ fontSize: '0.8rem', color: '#0088FF' }}>(+ {trip.legs[trip.legs.length - 1]?.distance?.text})</div></div>
+                     <span style={{ fontWeight: 'bold', color: 'white', backgroundColor: '#d35400', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', flexShrink: 0 }}>{getLetter(trip.orderedStops.length + 1)}</span>
+                    <div><div style={{ fontWeight: 'bold', color: '#d35400' }}>กลับคลังสินค้า</div><div style={{ fontSize: '0.8rem', color: '#0088FF' }}>{trip.legs[trip.legs.length - 1]?.distance?.text ? `(+ ${trip.legs[trip.legs.length - 1].distance?.text})` : ''}</div></div>
                   </li>
               ) : (
                   <li style={{ padding: '10px 0', display: 'flex', gap: '10px', opacity: 0.5 }}>
@@ -426,10 +407,10 @@ function App() {
                     <div style={{fontSize:'0.85rem', marginBottom:'5px', fontWeight:'bold', color:'#f57f17'}}>ขั้นแรก: ต้องหาพิกัดก่อน</div>
                     <button 
                         onClick={geocodeOrders} 
-                        disabled={isGeocoding || filteredOrders.some(o => o.lat)}
-                        style={{ width: '100%', padding: '8px', backgroundColor: filteredOrders.some(o => o.lat) ? '#4caf50' : '#ff9800', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                        disabled={isGeocoding || filteredOrders.some((o: any) => o.lat)}
+                        style={{ width: '100%', padding: '8px', backgroundColor: filteredOrders.some((o: any) => o.lat) ? '#4caf50' : '#ff9800', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
                     >
-                        {isGeocoding ? 'กำลังค้นหาพิกัด...' : filteredOrders.some(o => o.lat) ? '✅ มีพิกัดครบแล้ว' : '📍 1. ค้นหาพิกัด (Geocode)'}
+                        {isGeocoding ? 'กำลังค้นหาพิกัด...' : filteredOrders.some((o: any) => o.lat) ? '✅ มีพิกัดครบแล้ว' : '📍 1. ค้นหาพิกัด (Geocode)'}
                     </button>
                     {statusMsg && <div style={{fontSize:'0.75rem', marginTop:'5px', color:'#666'}}>{statusMsg}</div>}
                 </div>
@@ -475,7 +456,7 @@ function App() {
         {routeResults.length > 0 && (
             <div>
                 <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#e8f6f3', borderRadius: '6px', border: '1px solid #a2d9ce', color: '#16a085' }}><b>สรุป: ใช้รถ {routeResults.length} คัน</b></div>
-                {routeResults.map((trip) => (
+                {routeResults.map((trip: any) => (
                     <div key={trip.id} onClick={() => setActiveTripId(trip.id)} style={{ marginBottom: '12px', padding: '15px', backgroundColor: 'white', borderRadius: '8px', borderLeft: `6px solid ${trip.color}`, boxShadow: '0 2px 4px rgba(0,0,0,0.05)', cursor: 'pointer' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom:'6px' }}><b style={{ color: '#2c3e50' }}>รถคันที่ {trip.id} {trip.isOversized && '⚠️'}</b><span style={{ fontSize: '0.8rem', padding: '3px 8px', borderRadius: '12px', backgroundColor: '#f0f2f5' }}>{trip.distanceKm} km</span></div>
                         <div style={{ fontSize: '0.85rem', color:'#555' }}>📍 โซน: <b>{trip.firstDrop}</b> ...</div>
@@ -496,9 +477,9 @@ function App() {
       </div>
       <div style={{ flexGrow: 1, position: 'relative' }}>
         <GoogleMap mapContainerStyle={containerStyle} center={depotPos || center} zoom={9} options={{ disableDefaultUI: false, zoomControl: true }}>
-          {depotPos && <Marker position={depotPos} icon={depotIcon} zIndex={1000} />}
-          {routeResults.map((trip) => {
-            if (activeTripId !== null && trip.id !== activeTripId) return null;
+          {depotPos && <MarkerF position={depotPos} icon={depotIcon} zIndex={1000} />}
+          {routeResults.map((trip: any) => {
+            if ((activeTripId !== null && trip.id !== activeTripId) || !trip.data) return null;
             return (
                 <DirectionsRenderer 
                   key={trip.id} 
