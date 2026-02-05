@@ -4,59 +4,39 @@ import { GoogleMap, useJsApiLoader, DirectionsRenderer, MarkerF } from '@react-g
 // @ts-ignore
 import * as XLSX from 'xlsx';
 
-// --- Styles ---
 const containerStyle = { width: '100%', height: '100vh' };
 const center = { lat: 13.7563, lng: 100.5018 };
 const routeColors = ["#0088FF", "#FF0000", "#00FF00", "#9900FF", "#FF8800", "#00FFFF", "#FF00FF", "#FFFF00", "#000000", "#888888"];
+
+const VEHICLE_RULES = {
+  '4W': { label: '4 ล้อ (BKK Only)', maxKg: 3000, maxDrops: 5, mtdcDropLimit: 3 },
+  '6W': { label: '6 ล้อ (POSTO Only)', maxKg: 6000, maxDrops: 3 },
+  '10W': { label: '10 ล้อ (POSTO Only)', maxKg: 13000, maxDrops: 3 }
+};
 
 const depotIcon = {
   url: "http://googleusercontent.com/maps.google.com/mapfiles/ms/icons/blue-dot.png", 
   scaledSize: { width: 40, height: 40 }
 };
 
-const getLetter = (index: number) => String.fromCharCode(65 + index);
-
-// Helper Distance
 function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
   var R = 6371; 
-  var dLat = deg2rad(lat2-lat1);  
-  var dLon = deg2rad(lon2-lon1); 
-  var a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2)
-    ; 
-  var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
-  var d = R * c; 
-  return d;
-}
-
-function deg2rad(deg: number) {
-  return deg * (Math.PI/180)
+  var dLat = (lat2-lat1) * (Math.PI/180);  
+  var dLon = (lon2-lon1) * (Math.PI/180); 
+  var a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1 * (Math.PI/180)) * Math.cos(lat2 * (Math.PI/180)) * Math.sin(dLon/2) * Math.sin(dLon/2); 
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
 }
 
 function App() {
   const [allData, setAllData] = useState<any[]>([]);
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>('');
-  
-  const [originAddress, setOriginAddress] = useState<string>('บริษัท อำพลฟูดส์ โพรเซสซิ่ง จำกัด');
-  
-  // --- Limits ---
-  const [maxWeight, setMaxWeight] = useState<number>(3000); 
-  // maxCases จะถูกคำนวณอัตโนมัติ (แต่เก็บ State ไว้แสดงผล)
-  const [calculatedMaxCases, setCalculatedMaxCases] = useState<number>(0); 
-  const [avgKgPerCase, setAvgKgPerCase] = useState<number>(0); // ค่าเฉลี่ย Kg/Case ของวันนั้น
-
-  const [maxStops, setMaxStops] = useState<number>(20);
-  const [isRoundTrip, setIsRoundTrip] = useState<boolean>(true); 
-  
+  const [avgKgPerCase, setAvgKgPerCase] = useState<number>(0);
   const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
   const [routeResults, setRouteResults] = useState<any[]>([]); 
-  const [leftovers, setLeftovers] = useState<any[]>([]); 
-
+  const [leftovers, setLeftovers] = useState<any[]>([]);
   const [depotPos, setDepotPos] = useState<any>(null); 
   const [activeTripId, setActiveTripId] = useState<number | null>(null); 
-  const [errorMsg, setErrorMsg] = useState<string>('');
   const [statusMsg, setStatusMsg] = useState<string>('');
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
   const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
@@ -67,541 +47,197 @@ function App() {
     libraries: ['places'] 
   });
 
-  // --- Auto Calculate Max Cases when Weight or Orders change ---
   useEffect(() => {
-    if (filteredOrders.length > 0) {
-        // 1. หาผลรวมของวันนั้น
-        const totalWeight = filteredOrders.reduce((sum, o) => sum + o.weight, 0);
-        const totalCases = filteredOrders.reduce((sum, o) => sum + o.cases, 0);
-
-        if (totalCases > 0) {
-            // 2. หาค่าเฉลี่ย (Kg ต่อ 1 Case)
-            const avg = totalWeight / totalCases;
-            setAvgKgPerCase(avg);
-
-            // 3. คำนวณ Max Case จาก Max Weight ที่ตั้งไว้
-            // สูตร: รับนน.ได้ 3000 / (นน.เฉลี่ยต่อเคส) = จำนวนเคสที่รับได้
-            const autoMaxCases = Math.floor(maxWeight / avg);
-            setCalculatedMaxCases(autoMaxCases);
-        }
+    if (allData.length > 0) {
+        const totalKg = allData.reduce((s, row) => s + parseFloat(row['#Kg.'] || 0), 0);
+        const totalCs = allData.reduce((s, row) => s + parseFloat(row['#Case'] || 0), 0);
+        if (totalCs > 0) setAvgKgPerCase(totalKg / totalCs);
     }
-  }, [maxWeight, filteredOrders]);
-
+  }, [allData]);
 
   const handleFileUpload = (e: any) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (evt) => {
       const bstr = evt.target?.result;
-      if (!bstr) return;
-
       const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const data = XLSX.utils.sheet_to_json(wb.Sheets[wsname], { raw: false }) as any[];
-
-      if (data.length === 0) return;
-
-      const cleanedData = data.map(row => {
-        const newRow: any = {};
-        Object.keys(row).forEach(key => newRow[key.trim()] = row[key]);
-        return newRow;
+      const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { raw: false }) as any[];
+      const cleaned = data.map(row => {
+        const nr = {};
+        Object.keys(row).forEach(k => nr[k.trim()] = row[k]);
+        return nr;
       });
-
-      const dates = [...new Set(cleanedData.map((item: any) => item['Date']))].filter(d => d) as string[];
-      setAvailableDates(dates);
-      setAllData(cleanedData);
-      
-      if (dates.length > 0) handleDateChange(dates[0], cleanedData);
+      setAvailableDates([...new Set(cleaned.map((item: any) => item['Date']))].filter(d => d));
+      setAllData(cleaned);
+      if (cleaned.length > 0) handleDateChange(cleaned[0]['Date'], cleaned);
     };
     reader.readAsBinaryString(file);
   };
 
   const handleDateChange = (date: string, sourceData = allData) => {
     setSelectedDate(date);
-    const dailyOrders = sourceData.filter((row: any) => row['Date'] === date);
-    
-    const formatted = dailyOrders.map((row: any) => ({
+    const daily = sourceData.filter((row: any) => row['Date'] === date);
+    setFilteredOrders(daily.map((row: any) => ({
       name: row['Ship-to Name'],
       address: `${row['Ship-to Name']} ${row['District']} ${row['Province']}`, 
-      region: row['Region'] || '',
-      province: row['Province'] || '',
-      district: row['District'] || '',
+      province: (row['Province'] || '').trim(),
+      channel: (row['Channel'] || '').toUpperCase(),
       weight: parseFloat(row['#Kg.'] || '0'),
       cases: parseFloat(row['#Case'] || '0'),
-      lat: null, 
-      lng: null, 
-      raw: row
-    }));
-
-    setFilteredOrders(formatted);
-    setRouteResults([]); 
-    setLeftovers([]); 
-    setDepotPos(null);
-    setActiveTripId(null);
-    setErrorMsg('');
-    setStatusMsg('');
+      lat: null, lng: null
+    })));
+    setRouteResults([]); setLeftovers([]);
   };
 
   const geocodeOrders = async () => {
-    if (filteredOrders.length === 0) return;
     setIsGeocoding(true);
-    setErrorMsg('');
-    setStatusMsg(`กำลังค้นหาพิกัด ${filteredOrders.length} จุด (อาจใช้เวลาสักครู่)...`);
-
     const geocoder = new (window as any).google.maps.Geocoder();
-    const updatedOrders = [...filteredOrders];
-    let successCount = 0;
-
-    try {
-        const depotResult = await geocoder.geocode({ address: originAddress });
-        if (depotResult.results[0]) {
-            const loc = depotResult.results[0].geometry.location;
-            setDepotPos({ lat: loc.lat(), lng: loc.lng() });
-        }
-    } catch (e) {
-        console.warn("Depot geocode failed");
-    }
-
-    for (let i = 0; i < updatedOrders.length; i++) {
-        if (updatedOrders[i].lat) continue; 
-
+    const updated = [...filteredOrders];
+    for (let i = 0; i < updated.length; i++) {
         try {
-            await new Promise(r => setTimeout(r, 300)); 
-            
-            const res = await geocoder.geocode({ address: updatedOrders[i].address });
+            await new Promise(r => setTimeout(r, 200));
+            const res = await geocoder.geocode({ address: updated[i].address });
             if (res.results[0]) {
-                const loc = res.results[0].geometry.location;
-                updatedOrders[i].lat = loc.lat();
-                updatedOrders[i].lng = loc.lng();
-                successCount++;
-                setStatusMsg(`ค้นหาพิกัด... ${successCount}/${updatedOrders.length}`);
+                updated[i].lat = res.results[0].geometry.location.lat();
+                updated[i].lng = res.results[0].geometry.location.lng();
             }
-        } catch (error) {
-            console.warn(`Geocode failed for ${updatedOrders[i].name}:`, error);
-        }
+        } catch (e) {}
+        setStatusMsg(`ค้นหาพิกัด... ${i+1}/${updated.length}`);
+    }
+    setFilteredOrders(updated);
+    setIsGeocoding(false);
+  };
+
+  // Logic ตรวจสอบเงื่อนไขรถ (New Rules)
+  const validateVehicle = (orders: any[]) => {
+    const totalW = orders.reduce((s, o) => s + o.weight, 0);
+    const totalC = orders.reduce((s, o) => s + o.cases, 0);
+    const drops = orders.length;
+    const isBKK = orders.every(o => o.province === "กรุงเทพมหานคร");
+    const isPosto = orders.every(o => o.channel.includes("POSTO"));
+    const hasMtdc = orders.some(o => o.channel.includes("MTDC"));
+
+    // Check 4W: BKK Only
+    if (isBKK && totalW <= VEHICLE_RULES['4W'].maxKg) {
+        const dropLimit = hasMtdc ? VEHICLE_RULES['4W'].mtdcDropLimit : VEHICLE_RULES['4W'].maxDrops;
+        const maxCs = Math.floor(VEHICLE_RULES['4W'].maxKg / avgKgPerCase);
+        if (drops <= dropLimit && totalC <= maxCs) return '4W';
     }
 
-    setFilteredOrders(updatedOrders);
-    setIsGeocoding(false);
-    setStatusMsg(`ค้นหาพิกัดเสร็จสิ้น! เจอ ${successCount} จุด พร้อมคำนวณระยะทาง`);
+    // Check 6W: POSTO Only
+    if (isPosto && totalW <= VEHICLE_RULES['6W'].maxKg) {
+        const maxCs = Math.floor(VEHICLE_RULES['6W'].maxKg / avgKgPerCase);
+        if (drops <= VEHICLE_RULES['6W'].maxDrops && totalC <= maxCs) return '6W';
+    }
+
+    // Check 10W: POSTO Only
+    if (isPosto && totalW <= VEHICLE_RULES['10W'].maxKg) {
+        const maxCs = Math.floor(VEHICLE_RULES['10W'].maxKg / avgKgPerCase);
+        if (drops <= VEHICLE_RULES['10W'].maxDrops && totalC <= maxCs) return '10W';
+    }
+
+    return null;
   };
 
   async function calculateRoute() {
-    const hasCoords = filteredOrders.some((o: any) => o.lat !== null);
-    if (!hasCoords) {
-        setErrorMsg("กรุณากด 'ค้นหาพิกัด' ก่อน เพื่อให้ระบบคำนวณระยะทางได้");
-        return;
-    }
-
     setIsCalculating(true);
-    setRouteResults([]);
-    setLeftovers([]);
-    setActiveTripId(null);
-    setErrorMsg('');
-
-    const directionsService = new (window as any).google.maps.DirectionsService();
-    const LIMIT_PER_TRIP = Math.min(maxStops, 23); 
-
     let unassigned = [...filteredOrders];
-    const vehicles: any[] = [];
-    
-    let depotLat = depotPos ? depotPos.lat : 13.7563;
-    let depotLng = depotPos ? depotPos.lng : 100.5018;
+    const trips = [];
+    const rejected = [];
 
-    // --- Start Allocation Loop (No Fleet Limit) ---
     while (unassigned.length > 0) {
-        let currentVehicle: any = { orders: [], weight: 0, cases: 0 };
-        let currentLat = depotLat;
-        let currentLng = depotLng;
-        let currentProvince: string | null = null;
+        let currentTrip = [];
+        let lastPos = depotPos || { lat: 13.75, lng: 100.5 };
 
-        while (true) {
-            // Filter 1: Check Constraints
-            // ใช้ calculatedMaxCases ที่คำนวณมาแล้ว
-            let candidates = unassigned.filter((o: any) => {
-                const newWeight = Number((currentVehicle.weight + o.weight).toFixed(2));
-                const newCases = Number((currentVehicle.cases + o.cases).toFixed(2));
-                
-                // เงื่อนไข: น้ำหนักต้องไม่เกิน AND เคสต้องไม่เกิน (ที่คำนวณมา)
-                return newWeight <= maxWeight 
-                    && newCases <= calculatedMaxCases 
-                    && currentVehicle.orders.length < LIMIT_PER_TRIP;
-            });
+        while (unassigned.length > 0) {
+            unassigned.sort((a, b) => getDistanceFromLatLonInKm(lastPos.lat, lastPos.lng, a.lat, a.lng) - getDistanceFromLatLonInKm(lastPos.lat, lastPos.lng, b.lat, b.lng));
+            const candidate = unassigned[0];
+            const testSet = [...currentTrip, candidate];
 
-            if (candidates.length === 0) break; // ไม่มีของที่ใส่รถคันนี้ได้แล้ว (เต็ม) -> จบ Loop รถคันนี้ -> ไป Loop รถคันใหม่
-
-            // Filter 2: Province Priority
-            if (currentProvince) {
-                const sameProvCandidates = candidates.filter((o: any) => o.province === currentProvince);
-                if (sameProvCandidates.length > 0) {
-                    candidates = sameProvCandidates;
-                } else {
-                    currentProvince = null; 
-                }
-            }
-
-            // Filter 3: Nearest Neighbor
-            candidates.sort((a: any, b: any) => {
-                const distA = getDistanceFromLatLonInKm(currentLat, currentLng, a.lat || depotLat, a.lng || depotLng);
-                const distB = getDistanceFromLatLonInKm(currentLat, currentLng, b.lat || depotLat, b.lng || depotLng);
-                
-                if (Math.abs(distA - distB) < 0.1) { 
-                    return a.name.localeCompare(b.name); 
-                }
-                return distA - distB;
-            });
-
-            const best = candidates[0];
-
-            currentVehicle.orders.push(best);
-            currentVehicle.weight += best.weight;
-            currentVehicle.cases += best.cases;
-            
-            if (best.lat) {
-                currentLat = best.lat;
-                currentLng = best.lng;
-            }
-            if (!currentProvince) {
-                currentProvince = best.province; 
-            }
-
-            const index = unassigned.findIndex((u: any) => u === best);
-            if (index > -1) unassigned.splice(index, 1);
-        }
-
-        if (currentVehicle.orders.length > 0) {
-            vehicles.push(currentVehicle);
-        } else {
-            // กรณีเหลือเศษที่ใส่รถปกติไม่ได้ (เช่น Oversize มากๆ)
-            if (unassigned.length > 0) {
-                const stuck = unassigned.shift();
-                if (stuck) {
-                  vehicles.push({ 
-                      orders: [stuck], 
-                      weight: stuck.weight, 
-                      cases: stuck.cases, 
-                      isOversized: true 
-                  });
-                }
-            }
-        }
-    }
-
-    // --- Process Routing ---
-    try {
-      const results: any[] = [];
-      let foundDepot: any = null;
-
-      for (let i = 0; i < vehicles.length; i++) {
-        const vehicle = vehicles[i];
-        
-        let destination = originAddress;
-        let waypointsData = [...vehicle.orders];
-        
-        if (!isRoundTrip && waypointsData.length > 0) {
-             const lastOrder = waypointsData.pop(); 
-             if (lastOrder) destination = lastOrder.address;
-        }
-
-        const waypoints = waypointsData.map((order: any) => ({
-          location: order.address,
-          stopover: true
-        }));
-
-        await new Promise(r => setTimeout(r, 400)); 
-
-        let resultData: any = null;
-        let distKm = 0;
-        let orderedStops: any[] = [];
-        let legs: any[] = [];
-
-        try {
-            const result = await directionsService.route({
-                origin: originAddress,
-                destination: destination,
-                waypoints: waypoints,
-                optimizeWaypoints: true, 
-                travelMode: (window as any).google.maps.TravelMode.DRIVING,
-            });
-            
-            if (result && result.routes && result.routes.length > 0) {
-                resultData = result;
-                if (result.routes[0].legs) {
-                    distKm = result.routes[0].legs.reduce((acc: number, leg: any) => acc + (leg.distance?.value || 0), 0) / 1000;
-                    legs = result.routes[0].legs;
-                }
-                
-                const waypointOrder = result.routes[0].waypoint_order;
-                
-                if (isRoundTrip) {
-                    orderedStops = waypointOrder.map((index: number) => vehicle.orders[index]);
-                } else {
-                    const middleStops = waypointOrder.map((index: number) => waypointsData[index]);
-                    const lastStop = vehicle.orders[vehicle.orders.length - 1]; 
-                    orderedStops = [...middleStops, lastStop];
-                }
-
-                if (!foundDepot && result.routes[0].legs[0]) {
-                    const startLoc = result.routes[0].legs[0].start_location;
-                    foundDepot = { lat: startLoc.lat(), lng: startLoc.lng() };
-                }
-
-                results.push({
-                  id: i + 1,
-                  data: resultData,
-                  weight: vehicle.weight,
-                  cases: vehicle.cases,
-                  orderCount: vehicle.orders.length,
-                  distanceKm: distKm.toFixed(1),
-                  firstDrop: vehicle.orders[0].district, 
-                  isOversized: !!vehicle.isOversized || (vehicle.weight > maxWeight) || (vehicle.cases > calculatedMaxCases),
-                  orderedStops: orderedStops,
-                  legs: legs, 
-                  color: routeColors[i % routeColors.length]
-                });
+            const vType = validateVehicle(testSet);
+            if (vType) {
+                currentTrip.push(unassigned.shift());
+                lastPos = { lat: candidate.lat, lng: candidate.lng };
             } else {
-               console.warn("No routes found for vehicle " + (i+1));
-               results.push({
-                   id: i+1, data: null, weight: vehicle.weight, cases: vehicle.cases, orderCount: vehicle.orders.length,
-                   distanceKm: "N/A", firstDrop: vehicle.orders[0].district, isOversized: true, orderedStops: vehicle.orders, legs: [], color: "#999"
-               });
+                // ถ้าใส่จุดแรกแล้วยังไม่มีรถประเภทไหนรับได้ (เช่น นอก BKK และไม่ใช่ POSTO)
+                if (currentTrip.length === 0) rejected.push(unassigned.shift());
+                else break;
             }
-
-        } catch (err) {
-            console.warn("Routing failed for vehicle " + (i+1));
         }
-      }
-
-      setRouteResults(results);
-      if (foundDepot) setDepotPos(foundDepot);
-      setStatusMsg(`จัดเส้นทางเสร็จสิ้น! ได้ ${results.length} คัน`);
-
-    } catch (error: any) {
-      console.error("Routing Error:", error);
-      setErrorMsg("เกิดข้อผิดพลาด: " + (error.message || error));
-    } finally {
-      setIsCalculating(false);
+        if (currentTrip.length > 0) trips.push({ orders: currentTrip, type: validateVehicle(currentTrip) });
     }
+
+    // เรียก API วาดเส้นทาง
+    const ds = new (window as any).google.maps.DirectionsService();
+    const results = [];
+    for (let i = 0; i < trips.length; i++) {
+        const res = await ds.route({
+            origin: "บริษัท อำพลฟูดส์ โพรเซสซิ่ง จำกัด",
+            destination: "บริษัท อำพลฟูดส์ โพรเซสซิ่ง จำกัด",
+            waypoints: trips[i].orders.map(o => ({ location: o.address, stopover: true })),
+            optimizeWaypoints: true,
+            travelMode: 'DRIVING'
+        });
+        results.push({
+            id: i + 1,
+            data: res,
+            vType: trips[i].type,
+            weight: trips[i].orders.reduce((s, o) => s + o.weight, 0),
+            cases: trips[i].orders.reduce((s, o) => s + o.cases, 0),
+            stops: trips[i].orders.length,
+            color: routeColors[i % routeColors.length]
+        });
+        await new Promise(r => setTimeout(r, 300));
+    }
+    setRouteResults(results);
+    setLeftovers(rejected);
+    setIsCalculating(false);
+    setStatusMsg(`จัดเสร็จสิ้น! ใช้รถ ${results.length} คัน | ตกค้าง ${rejected.length} รายการ`);
   }
 
-  const handleExportExcel = () => {
-    const exportData: any[] = [];
-    routeResults.forEach((trip) => {
-        trip.orderedStops.forEach((stop: any, index: number) => {
-            exportData.push({
-                "Trip No": trip.id,
-                "Stop Seq": index + 1,
-                "Date": selectedDate,
-                "Ship-to Name": stop.name,
-                "Address": stop.address,
-                "Province": stop.province,
-                "Weight (kg)": stop.weight,
-                "Case": stop.cases,
-                "Distance From Prev": trip.legs[index]?.distance?.text || "Start",
-            });
-        });
-    });
+  return (
+    <div style={{ display: 'flex', height: '100vh', fontFamily: 'Sarabun' }}>
+      <div style={{ width: '420px', padding: '20px', overflowY: 'auto', borderRight: '1px solid #ddd', backgroundColor: '#f4f7f6' }}>
+        <h3>🚚 Delivery Planner (BKK/POSTO Rules)</h3>
+        <input type="file" onChange={handleFileUpload} accept=".xlsx" style={{ marginBottom: '15px' }} />
+        
+        <button onClick={geocodeOrders} disabled={isGeocoding} style={{ width: '100%', padding: '10px', marginBottom: '10px' }}>📍 1. Geocode</button>
+        <button onClick={calculateRoute} disabled={isCalculating || filteredOrders.length === 0} style={{ width: '100%', padding: '12px', backgroundColor: '#28a745', color: '#fff', fontWeight: 'bold' }}>🚀 2. Run Optimizer</button>
 
-    const wb = XLSX.utils.book_new();
-    if (exportData.length > 0) {
-        const ws1 = XLSX.utils.json_to_sheet(exportData);
-        XLSX.utils.book_append_sheet(wb, ws1, "Route Plan");
-    }
+        <hr/>
+        {statusMsg && <div style={{ padding: '10px', backgroundColor: '#fff3cd', borderRadius: '5px', fontSize: '0.85rem' }}>{statusMsg}</div>}
 
-    XLSX.writeFile(wb, `Delivery_Plan_${selectedDate}.xlsx`);
-  };
-
-  const renderSidebarContent = () => {
-    if (activeTripId !== null) {
-      const trip = routeResults.find((t: any) => t.id === activeTripId);
-      if (!trip) return null;
-      
-      return (
-        <div style={{ animation: 'fadeIn 0.3s', textAlign: 'left' }}>
-          <button onClick={() => setActiveTripId(null)} style={{ marginBottom: '15px', padding: '5px 10px', cursor: 'pointer', backgroundColor: '#eee', border: 'none', borderRadius: '4px' }}>
-            ← กลับไปหน้าสรุป
-          </button>
-          
-          <div style={{ padding: '15px', borderLeft: `5px solid ${trip.color}`, backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <h3 style={{ margin: '0 0 10px 0' }}>🚛 รถคันที่ {trip.id}</h3>
-            <div style={{ fontSize: '0.9rem' }}><b>ระยะทางรวม:</b> {trip.distanceKm} km</div>
-            
-            <div style={{ fontSize: '0.9rem', marginTop:'10px', padding:'10px', backgroundColor:'#f9f9f9', borderRadius:'5px' }}>
-                <div style={{display:'flex', justifyContent:'space-between'}}>
-                    <span>⚖️ นน.: {trip.weight.toLocaleString()} / {maxWeight} kg</span>
-                    <span style={{color:'green', fontWeight:'bold'}}>ว่าง: {(maxWeight - trip.weight).toLocaleString()}</span>
-                </div>
-                <div style={{display:'flex', justifyContent:'space-between'}}>
-                    <span>📦 Case: {trip.cases.toLocaleString()} / {calculatedMaxCases}</span>
-                    <span style={{color:'green', fontWeight:'bold'}}>ว่าง: {(calculatedMaxCases - trip.cases).toLocaleString()}</span>
-                </div>
-            </div>
-            
-            <h4 style={{ borderBottom: '1px solid #ddd', paddingBottom: '5px', marginTop: '15px' }}>ลำดับการวิ่ง (Sequence)</h4>
-            <ul style={{ paddingLeft: '0', listStyle: 'none', fontSize: '0.9rem', textAlign: 'left' }}>
-              <li style={{ padding: '10px 0', borderBottom: '1px dashed #eee', display: 'flex', gap: '10px' }}>
-                <span style={{ fontWeight: 'bold', color: 'white', backgroundColor: '#d35400', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', flexShrink: 0 }}>A</span>
-                <div>
-                    <div style={{ fontWeight: 'bold', color: '#d35400' }}>จุดเริ่มต้น (คลังสินค้า)</div>
-                    <div style={{ fontSize: '0.8rem', color: '#666' }}>{originAddress}</div>
-                </div>
-              </li>
-              {trip.orderedStops.map((stop: any, idx: number) => {
-                const markerLetter = getLetter(idx + 1);
-                const legInfo = trip.legs[idx];
-                const distanceText = legInfo && legInfo.distance ? `(+ ${legInfo.distance.text})` : '';
-                return (
-                  <li key={idx} style={{ padding: '10px 0', borderBottom: '1px dashed #eee', display: 'flex', gap: '10px' }}>
-                    <span style={{ fontWeight: 'bold', color: 'white', backgroundColor: '#2c3e50', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', flexShrink: 0 }}>{markerLetter}</span>
-                    <div style={{ flexGrow: 1 }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                          <span style={{ fontWeight: 'bold' }}>{stop.name}</span>
-                          <span style={{ fontSize: '0.75rem', color: '#0088FF', whiteSpace:'nowrap' }}>{distanceText}</span>
-                      </div>
-                      <div style={{ fontSize: '0.8rem', color: '#666' }}>{stop.district}, {stop.province}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#27ae60' }}>
-                          ⚖️ {stop.weight} kg | 📦 {stop.cases} cs
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div style={{ textAlign: 'left' }}>
-        <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)', marginBottom: '20px' }}>
-            <h2 style={{ margin: '0 0 15px 0', color: '#2c3e50', fontSize:'1.4rem' }}>⚙️ ตั้งค่าการจัดส่ง</h2>
-            
-            <div style={{ marginBottom: '12px' }}>
-                <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>1. อัปโหลดไฟล์ Excel</label>
-                <input type="file" onChange={handleFileUpload} accept=".xlsx, .xls" style={{fontSize:'0.85rem'}}/>
-            </div>
-
-            {allData.length > 0 && (
-            <>
-                <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#fff8e1', borderRadius: '6px', border: '1px solid #ffe082' }}>
-                    <button 
-                        onClick={geocodeOrders} 
-                        disabled={isGeocoding || filteredOrders.some((o: any) => o.lat)}
-                        style={{ width: '100%', padding: '8px', backgroundColor: filteredOrders.some((o: any) => o.lat) ? '#4caf50' : '#ff9800', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                    >
-                        {isGeocoding ? 'กำลังค้นหาพิกัด...' : filteredOrders.some((o: any) => o.lat) ? '✅ มีพิกัดครบแล้ว' : '📍 1. ค้นหาพิกัด (Geocode)'}
-                    </button>
-                    {statusMsg && <div style={{fontSize:'0.75rem', marginTop:'5px', color:'#666'}}>{statusMsg}</div>}
-                </div>
-
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px' }}>
-                  <div style={{ marginBottom: '10px', gridColumn: '1 / -1' }}>
-                      <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>2. จุดเริ่มต้น</label>
-                      <input type="text" value={originAddress} onChange={(e) => setOriginAddress(e.target.value)} style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', boxSizing:'border-box'}} />
-                  </div>
-                  <div style={{ marginBottom: '10px' }}>
-                      <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>3. รับนน. (Kg)</label>
-                      <input type="number" value={maxWeight} onChange={(e) => setMaxWeight(Number(e.target.value))} style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', boxSizing:'border-box'}} />
-                  </div>
-                  
-                  {/* ช่องแสดงผล Max Case แบบ Read-only (เพราะคำนวณอัตโนมัติ) */}
-                  <div style={{ marginBottom: '10px' }}>
-                      <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>
-                        4. รับ Case (Calc: {avgKgPerCase.toFixed(2)}kg/cs)
-                      </label>
-                      <input 
-                        type="number" 
-                        value={calculatedMaxCases} 
-                        readOnly 
-                        style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', boxSizing:'border-box', backgroundColor: '#e9ecef', color: '#495057'}} 
-                      />
-                  </div>
-                  
-                  <div style={{ marginBottom: '10px', gridColumn: '1 / -1' }}>
-                      <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>5. จุดส่งสูงสุด</label>
-                      <input type="number" value={maxStops} onChange={(e) => setMaxStops(Number(e.target.value))} min="1" max="23" style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', boxSizing:'border-box'}} />
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#f0f2f5', borderRadius: '6px' }}>
-                    <label style={{display:'flex', alignItems:'center', cursor:'pointer', gap:'10px'}}>
-                        <input type="checkbox" checked={isRoundTrip} onChange={(e) => setIsRoundTrip(e.target.checked)} style={{ width: '18px', height: '18px' }}/>
-                        <span style={{ fontSize: '0.9rem', fontWeight: '600' }}>วิ่งงานเสร็จ วนกลับคลัง (Round Trip)</span>
-                    </label>
-                </div>
-
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{display:'block', marginBottom:'4px', fontWeight:'600', fontSize:'0.85rem'}}>6. เลือกวันที่</label>
-                    <select value={selectedDate} onChange={(e) => handleDateChange(e.target.value)} style={{width:'100%', padding:'8px', border:'1px solid #ccc', borderRadius:'4px', backgroundColor:'#fff'}}>
-                        {availableDates.map(d => <option key={d} value={d}>{d}</option>)}
-                    </select>
-                </div>
-
-                <button onClick={calculateRoute} disabled={isCalculating || isGeocoding || filteredOrders.length === 0} style={{ width: '100%', padding: '12px', backgroundColor: isCalculating ? '#bdc3c7' : '#27ae60', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>
-                    {isCalculating ? 'กำลังประมวลผล...' : '3. เริ่มจัดเส้นทาง 🚀'}
-                </button>
-            </>
-            )}
-        </div>
-
-        {errorMsg && <div style={{ color: '#c0392b', marginBottom: '20px', padding: '10px', backgroundColor: '#fadbd8', borderRadius: '6px' }}>{errorMsg}</div>}
-
-        {routeResults.length > 0 && (
-            <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', padding: '10px', backgroundColor: '#e8f6f3', borderRadius: '6px', border: '1px solid #a2d9ce' }}>
-                    <b style={{color: '#16a085'}}>สรุป: {routeResults.length} คัน</b>
-                    <button 
-                        onClick={handleExportExcel}
-                        style={{ padding: '6px 12px', backgroundColor: '#2196F3', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 'bold' }}
-                    >
-                        📥 Export Excel
-                    </button>
-                </div>
-
-                {routeResults.map((trip: any) => (
-                    <div key={trip.id} onClick={() => setActiveTripId(trip.id)} style={{ marginBottom: '12px', padding: '15px', backgroundColor: 'white', borderRadius: '8px', borderLeft: `6px solid ${trip.color}`, boxShadow: '0 2px 4px rgba(0,0,0,0.05)', cursor: 'pointer' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom:'6px' }}><b style={{ color: '#2c3e50' }}>รถคันที่ {trip.id} {trip.isOversized && '⚠️'}</b><span style={{ fontSize: '0.8rem', padding: '3px 8px', borderRadius: '12px', backgroundColor: '#f0f2f5' }}>{trip.distanceKm} km</span></div>
-                        <div style={{ fontSize: '0.85rem', color:'#555', marginBottom:'5px' }}>📍 โซน: <b>{trip.firstDrop}</b> ...</div>
-                        
-                        <div style={{fontSize:'0.8rem', color:'#777'}}>
-                           เหลือเศษ: <b>{(maxWeight - trip.weight).toLocaleString()} kg</b> | <b>{(calculatedMaxCases - trip.cases).toLocaleString()} cs</b>
-                        </div>
-                    </div>
-                ))}
+        {/* ส่วนแสดงรายการตกค้าง */}
+        {leftovers.length > 0 && (
+            <div style={{ marginTop: '15px', padding: '10px', backgroundColor: '#f8d7da', borderRadius: '5px' }}>
+                <b style={{ color: '#721c24' }}>⚠️ รายการตกค้าง (จัดไม่ได้ตามเงื่อนไข):</b>
+                <ul style={{ fontSize: '0.75rem', paddingLeft: '20px' }}>
+                    {leftovers.map((o, idx) => <li key={idx}>{o.name} ({o.province} - {o.channel})</li>)}
+                </ul>
             </div>
         )}
-      </div>
-    );
-  };
 
-  if (!isLoaded) return <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh'}}>Loading Google Maps...</div>;
-
-  return (
-    <div style={{ display: 'flex', height: '100vh', width: '100vw', fontFamily: "'Sarabun', sans-serif", overflow: 'hidden' }}>
-      <div style={{ width: '400px', minWidth: '400px', height: '100%', display: 'flex', flexDirection: 'column', borderRight: '1px solid #e0e0e0', backgroundColor: '#f4f6f8', zIndex: 2 }}>
-        <div style={{ padding: '20px', overflowY: 'auto', flexGrow: 1 }}>{renderSidebarContent()}</div>
+        {routeResults.map(trip => (
+          <div key={trip.id} onClick={() => setActiveTripId(trip.id)} style={{ padding: '12px', marginTop: '10px', backgroundColor: '#fff', borderLeft: `6px solid ${trip.color}`, cursor: 'pointer', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <b>คันที่ {trip.id}: {trip.vType}</b>
+                <span style={{ fontSize: '0.7rem', color: '#666' }}>{trip.stops} Drops</span>
+            </div>
+            <small>⚖️ {trip.weight.toLocaleString()} kg | 📦 {trip.cases} cs</small>
+          </div>
+        ))}
       </div>
-      <div style={{ flexGrow: 1, position: 'relative' }}>
-        <GoogleMap mapContainerStyle={containerStyle} center={depotPos || center} zoom={9} options={{ disableDefaultUI: false, zoomControl: true }}>
-          {depotPos && <MarkerF position={depotPos} icon={depotIcon} zIndex={1000} />}
-          {routeResults.map((trip: any) => {
-            if ((activeTripId !== null && trip.id !== activeTripId) || !trip.data) return null;
-            return (
-                <DirectionsRenderer 
-                  key={trip.id} 
-                  directions={trip.data} 
-                  options={{
-                    polylineOptions: { strokeColor: trip.color, strokeWeight: activeTripId === trip.id ? 8 : 5, zIndex: activeTripId === trip.id ? 999 : 10 },
-                    suppressMarkers: false,
-                    preserveViewport: true
-                  }}
-                />
-            );
-          })}
-        </GoogleMap>
+
+      <div style={{ flexGrow: 1 }}>
+        {isLoaded && (
+          <GoogleMap mapContainerStyle={containerStyle} center={center} zoom={10}>
+            {routeResults.map(trip => (
+              (activeTripId === null || activeTripId === trip.id) && 
+              <DirectionsRenderer key={trip.id} directions={trip.data} options={{ polylineOptions: { strokeColor: trip.color, strokeWeight: 6 } }} />
+            ))}
+          </GoogleMap>
+        )}
       </div>
     </div>
   );
