@@ -55,8 +55,7 @@ function App() {
 
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
-  // ใช้ import.meta.env.... แทนการใส่ string ตรงๆ
-googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
+    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "", 
     libraries: ['places'] 
   });
 
@@ -332,6 +331,41 @@ googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
     }
   }
 
+  // --- New Function: Export to Excel ---
+  const handleExportExcel = () => {
+    if (routeResults.length === 0) return;
+
+    // Flatten data: แปลงโครงสร้างจาก Trip -> Stops ให้เป็น Row เดียวกันหมด
+    const exportData: any[] = [];
+
+    routeResults.forEach((trip) => {
+        trip.orderedStops.forEach((stop: any, index: number) => {
+            // ดึงข้อมูล Original (raw) มาใส่ด้วยถ้าต้องการ
+            exportData.push({
+                "Trip No": trip.id,
+                "Stop Seq": index + 1,
+                "Date": selectedDate,
+                "Ship-to Name": stop.name,
+                "Address": stop.address,
+                "Province": stop.province,
+                "District": stop.district,
+                "Weight (kg)": stop.weight,
+                "Distance From Prev": trip.legs[index]?.distance?.text || "Start",
+                // ถ้าอยากได้ฟิลด์อื่นจาก Excel ต้นฉบับ
+                // "Order ID": stop.raw?.['Order No'] || "", 
+            });
+        });
+    });
+
+    // Create Worksheet & Workbook
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Route Plan");
+
+    // Save File
+    XLSX.writeFile(wb, `Delivery_Plan_${selectedDate}.xlsx`);
+  };
+
   const renderSidebarContent = () => {
     if (activeTripId !== null) {
       const trip = routeResults.find((t: any) => t.id === activeTripId);
@@ -456,7 +490,17 @@ googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
 
         {routeResults.length > 0 && (
             <div>
-                <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#e8f6f3', borderRadius: '6px', border: '1px solid #a2d9ce', color: '#16a085' }}><b>สรุป: ใช้รถ {routeResults.length} คัน</b></div>
+                {/* ปุ่ม Export อยู่ตรงนี้ */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', padding: '10px', backgroundColor: '#e8f6f3', borderRadius: '6px', border: '1px solid #a2d9ce' }}>
+                    <b style={{color: '#16a085'}}>สรุป: {routeResults.length} คัน</b>
+                    <button 
+                        onClick={handleExportExcel}
+                        style={{ padding: '6px 12px', backgroundColor: '#2196F3', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 'bold' }}
+                    >
+                        📥 Export Excel
+                    </button>
+                </div>
+
                 {routeResults.map((trip: any) => (
                     <div key={trip.id} onClick={() => setActiveTripId(trip.id)} style={{ marginBottom: '12px', padding: '15px', backgroundColor: 'white', borderRadius: '8px', borderLeft: `6px solid ${trip.color}`, boxShadow: '0 2px 4px rgba(0,0,0,0.05)', cursor: 'pointer' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom:'6px' }}><b style={{ color: '#2c3e50' }}>รถคันที่ {trip.id} {trip.isOversized && '⚠️'}</b><span style={{ fontSize: '0.8rem', padding: '3px 8px', borderRadius: '12px', backgroundColor: '#f0f2f5' }}>{trip.distanceKm} km</span></div>
