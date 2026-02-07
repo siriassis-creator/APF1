@@ -33,7 +33,6 @@ function excelDateToJSDate(serial) {
    return `${day}/${month}/${year}`;
 }
 
-// แปลงเวลา Excel/String เป็นนาที
 function parseExcelTime(val) {
     if (val === undefined || val === null || val === "") return null;
     if (typeof val === 'number') {
@@ -50,7 +49,6 @@ function parseExcelTime(val) {
     return null;
 }
 
-// แปลงนาทีกลับเป็นข้อความ HH:MM
 function minutesToTimeStr(totalMinutes) {
     if (totalMinutes === null || totalMinutes === undefined) return "";
     const h = Math.floor(totalMinutes / 60);
@@ -68,12 +66,13 @@ function getDist(lat1, lon1, lat2, lon2) {
 
 function App() {
   const [allData, setAllData] = useState([]);
-  const [rawData, setRawData] = useState([]); // เก็บ Raw Data ไว้ export
+  const [rawData, setRawData] = useState([]);
   const [availableDates, setAvailableDates] = useState([]);
   const [selectedDate, setSelectedDate] = useState('');
   const [originAddress, setOriginAddress] = useState('บริษัท อำพลฟูดส์ โพรเซสซิ่ง จำกัด');
   const [isRoundTrip, setIsRoundTrip] = useState(true);
   const [useLatLongFromExcel, setUseLatLongFromExcel] = useState(false);
+  const [avoidTolls, setAvoidTolls] = useState(false);
   
   const [filteredOrders, setFilteredOrders] = useState([]);
   const [routeResults, setRouteResults] = useState([]);
@@ -107,10 +106,8 @@ function App() {
           return;
       }
 
-      // 1. เก็บ Raw Data ไว้ (ทั้งก้อน)
       setRawData(data);
 
-      // 2. Process Data สำหรับ App
       const cleaned = data.slice(1).map(row => {
         return {
             date: excelDateToJSDate(row[0]), 
@@ -124,13 +121,10 @@ function App() {
             channel: (row[10] || '').toUpperCase(), 
             cases: parseFloat(row[11] || 0),        
             weight: parseFloat(row[12] || 0),
-            
-            // New Columns
             timeStart: parseExcelTime(row[13]), 
             timeEnd: parseExcelTime(row[14]),   
             street1: row[15] || '',             
             street2: row[16] || '',             
-            
             originalLat: parseFloat(row[7] || 0),
             originalLng: parseFloat(row[8] || 0)
         };
@@ -181,16 +175,9 @@ function App() {
 
   const handleClearData = () => {
     if(window.confirm('ต้องการล้างข้อมูลทั้งหมด?')) {
-        setAllData([]);
-        setRawData([]);
-        setAvailableDates([]);
-        setSelectedDate('');
-        setFilteredOrders([]);
-        setRouteResults([]);
-        setLeftovers([]);
-        setDepotPos(null);
-        setActiveTripId(null);
-        setStatusMsg('');
+        setAllData([]); setRawData([]); setAvailableDates([]); setSelectedDate('');
+        setFilteredOrders([]); setRouteResults([]); setLeftovers([]);
+        setDepotPos(null); setActiveTripId(null); setStatusMsg('');
         if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -266,7 +253,6 @@ function App() {
 
     let unassigned = [...filteredOrders.filter(o => o.lat !== null)];
     
-    // Sort เบื้องต้น: เวลาเริ่ม -> ระยะทาง
     unassigned.sort((a, b) => {
         const tA = a.timeStart !== null ? a.timeStart : 9999;
         const tB = b.timeStart !== null ? b.timeStart : 9999;
@@ -330,6 +316,7 @@ function App() {
           destination: destination,
           waypoints: apiWaypoints,
           optimizeWaypoints: true,
+          avoidTolls: avoidTolls,
           travelMode: 'DRIVING'
         });
 
@@ -340,6 +327,27 @@ function App() {
         let totalDistMeters = 0;
         route.legs.forEach(leg => totalDistMeters += leg.distance.value);
         const totalDistKm = (totalDistMeters / 1000).toFixed(1);
+
+        // Analyze Tolls (Enhanced Keyword Matching)
+        const analyzedLegs = route.legs.map(leg => {
+             const instructions = (leg.steps || [])
+                .map(s => (s.instructions || s.html_instructions || "").toLowerCase())
+                .join(" ");
+             
+             // List of keywords indicating tolls/expressways/motorways
+             const tollKeywords = [
+                 "toll", "ทางด่วน", "ค่าผ่านทาง", 
+                 "motorway", "มอเตอร์เวย์", "ทล.7", "ทล.9", 
+                 "ทางพิเศษ", "expressway", "ด่านเก็บเงิน", "ด่าน",
+                 "burapha withi", "บูรพาวิถี",
+                 "kanchanaphisek", "กาญจนาภิเษก",
+                 "chalong rat", "ฉลองรัช",
+                 "sirat", "ศรีรัช"
+             ];
+
+             const hasTolls = tollKeywords.some(kw => instructions.includes(kw));
+             return { ...leg, hasTolls };
+        });
 
         let orderedStops = [];
         if (isRoundTrip) {
@@ -361,7 +369,7 @@ function App() {
           totalDist: totalDistKm,
           color: routeColors[i % routeColors.length],
           stops: trip.orders.length,
-          legs: route.legs,
+          legs: analyzedLegs, 
           orderedStops: orderedStops 
         });
       } catch (err) { console.error(err); }
@@ -400,7 +408,6 @@ function App() {
 
   const summary = calculateSummary();
 
-  // --- Export Logic Adjusted ---
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
 
@@ -442,14 +449,11 @@ function App() {
 
     // Sheet 3: Original (Filtered by Date)
     if (rawData.length > 0) {
-        const header = rawData[0]; // เก็บ Header ไว้
-        // กรองเอาเฉพาะข้อมูลที่มีวันที่ตรงกับ selectedDate
+        const header = rawData[0];
         const filteredRawRows = rawData.slice(1).filter(row => {
             const rowDateStr = excelDateToJSDate(row[0]);
             return rowDateStr === selectedDate;
         });
-        
-        // รวม Header กลับเข้าไป
         const finalOriginalData = [header, ...filteredRawRows];
         const wsOriginal = XLSX.utils.aoa_to_sheet(finalOriginalData);
         XLSX.utils.book_append_sheet(wb, wsOriginal, "Original");
@@ -490,7 +494,6 @@ function App() {
                     <input type="text" value={originAddress} onChange={e => setOriginAddress(e.target.value)} />
                 </div>
                 
-                {/* Options Group */}
                 <div className="options-box">
                     <div className="options-title">⚙️ Options</div>
                     <div className="input-group">
@@ -506,6 +509,10 @@ function App() {
                     <label className="checkbox-row">
                         <input type="checkbox" checked={useLatLongFromExcel} onChange={e => setUseLatLongFromExcel(e.target.checked)} />
                         <span>ใช้พิกัดจากไฟล์ Excel (Lat/Long)</span>
+                    </label>
+                    <label className="checkbox-row">
+                        <input type="checkbox" checked={avoidTolls} onChange={e => setAvoidTolls(e.target.checked)} />
+                        <span>🚫 หลีกเลี่ยงทางด่วน</span>
                     </label>
                 </div>
 
@@ -532,7 +539,6 @@ function App() {
 
           <div className="status-bar">{statusMsg}</div>
 
-          {/* Summary Dashboard */}
           {allData.length > 0 && (
             <div className="summary-dashboard">
                 <div className="summary-col">
@@ -613,7 +619,11 @@ function App() {
                             )}
                             <div className="stop-addr">{stop.displayAddress || stop.district + ' ' + stop.province}</div>
                             <div className="stop-detail">📦 {stop.cases} cs | ⚖️ {stop.weight} kg</div>
-                            {leg && <div className="stop-meta">🚩 {leg.distance.text} • 🕒 {leg.duration.text}</div>}
+                            
+                            <div className="stop-meta-row">
+                                {leg && <div className="stop-meta">🚩 {leg.distance.text} • 🕒 {leg.duration.text}</div>}
+                                {leg?.hasTolls && !avoidTolls && <span className="toll-badge">💸 ทางด่วน</span>}
+                            </div>
                           </div>
                         </div>
                       );
@@ -654,6 +664,31 @@ function App() {
             />
           ))}
           
+          {/* 1. Trip Labels (Click to activate) */}
+          {activeTripId === null && routeResults.map(trip => {
+             const lastStop = trip.orderedStops[trip.orderedStops.length - 1];
+             if (!lastStop) return null;
+             return (
+               <MarkerF
+                 key={`label-${trip.id}`}
+                 position={{ lat: lastStop.lat, lng: lastStop.lng }}
+                 icon={{
+                    path: "M -20, -10 h 40 q 5,0 5,5 v 10 q 0,5 -5,5 h -40 q -5,0 -5,-5 v -10 q 0,-5 5,-5 z",
+                    fillColor: trip.color,
+                    fillOpacity: 1,
+                    strokeColor: "white",
+                    strokeWeight: 1.5,
+                    scale: 1.2,
+                    labelOrigin: { x: 0, y: 0 }
+                 }}
+                 label={{ text: `TRIP ${trip.id}`, color: "white", fontWeight: "bold", fontSize: "11px" }}
+                 zIndex={200}
+                 onClick={() => setActiveTripId(trip.id)}
+               />
+             );
+          })}
+
+          {/* 2. Detail Markers */}
           {activeTripId !== null && routeResults.find(t => t.id === activeTripId)?.orderedStops.map((stop, i) => (
              <React.Fragment key={i}>
                  <MarkerF 
@@ -670,18 +705,12 @@ function App() {
                     }}
                  >
                     <div style={{
-                        padding: '4px 8px', 
-                        borderRadius: '4px',
-                        backgroundColor: 'white',
-                        border: '1px solid #ccc',
-                        color: '#333',
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
-                        minWidth: '130px'
+                        padding: '4px 8px', borderRadius: '4px', backgroundColor: 'white',
+                        border: '1px solid #ccc', color: '#333',
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.2)', minWidth: '130px'
                     }}>
                         <div style={{ fontWeight: 'bold', fontSize: '11px', marginBottom: '2px' }}>{stop.name}</div>
-                        {stop.timeWindowText && (
-                            <div style={{ fontSize: '10px', color: '#dc2626', fontWeight: 'bold' }}>🕒 {stop.timeWindowText}</div>
-                        )}
+                        {stop.timeWindowText && <div style={{ fontSize: '10px', color: '#dc2626', fontWeight: 'bold' }}>🕒 {stop.timeWindowText}</div>}
                         <div style={{ fontSize: '10px', color: '#666' }}>{stop.displayAddress || stop.district}</div>
                     </div>
                  </InfoWindowF>
@@ -709,53 +738,40 @@ function App() {
         
         .options-box { background: white; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; margin-bottom: 15px; }
         .options-title { font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
-        
         .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; padding-bottom: 8px; cursor: pointer; color: #334155; }
-        
         .action-buttons { display: grid; grid-template-columns: 1fr 1.5fr; gap: 10px; margin-top: 10px; }
         .btn-secondary { background: white; border: 1px solid #cbd5e1; color: #334155; padding: 10px; border-radius: 8px; font-weight: 600; cursor: pointer; }
         .btn-primary { background: #4f46e5; color: white; border: none; padding: 10px; border-radius: 8px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.2s; }
         .btn-primary:hover { background: #4338ca; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3); }
         .btn-primary:disabled { opacity: 0.7; cursor: not-allowed; }
         .btn-primary.loading { background: #6366f1; cursor: wait; }
-        
         .btn-clear-full { width: 100%; margin-top: 10px; background: #fee2e2; color: #dc2626; border: 1px dashed #fca5a5; padding: 8px; border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: 0.2s; }
         .btn-clear-full:hover { background: #fecaca; }
-        
         .status-bar { text-align: center; font-size: 0.85rem; color: #10b981; font-weight: 600; margin-bottom: 15px; min-height: 20px; }
-        
-        /* Summary Dashboard */
         .summary-dashboard { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 20px; }
         .summary-col { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 5px; text-align: center; }
         .summary-col.planned { border-color: #86efac; background: #f0fdf4; }
         .summary-col.leftover { border-color: #fca5a5; background: #fef2f2; }
-        
         .sum-label { font-size: 0.65rem; color: #64748b; font-weight: 700; text-transform: uppercase; }
         .sum-val { font-size: 0.9rem; font-weight: 800; color: #1e293b; margin: 2px 0; }
         .sum-sub { font-size: 0.65rem; color: #94a3b8; }
-
         .leftover-card { background: #fff1f2; border: 1px solid #fecdd3; padding: 12px; border-radius: 8px; margin-bottom: 20px; }
         .leftover-card h4 { color: #be123c; font-size: 0.85rem; margin-bottom: 8px; }
         .leftover-list { max-height: 100px; overflow-y: auto; }
         .leftover-item { font-size: 0.75rem; color: #881337; padding: 4px 0; border-bottom: 1px solid #ffe4e6; }
-        
         .trip-list-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .trip-list-header h3 { font-size: 0.95rem; color: #334155; }
         .btn-export { background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; }
-        
         .trip-card { background: white; border: 1px solid #e2e8f0; border-left: 4px solid #ccc; border-radius: 10px; padding: 16px; margin-bottom: 12px; cursor: pointer; transition: all 0.2s; position: relative; }
         .trip-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); }
         .trip-card.active { border-color: #6366f1; background: #f8fafc; }
-        
         .trip-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
         .badge { font-size: 0.65rem; color: white; padding: 2px 6px; border-radius: 4px; font-weight: 800; letter-spacing: 0.5px; }
         .v-label { font-size: 0.9rem; font-weight: 700; color: #1e293b; margin-left: 8px; }
         .load-pct { font-size: 0.85rem; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
         .load-pct.good { background: #dcfce7; color: #15803d; }
         .load-pct.low { background: #fef9c3; color: #a16207; }
-        
         .trip-metrics { font-size: 0.75rem; color: #64748b; display: flex; gap: 12px; font-weight: 500; }
-        
         .trip-details { margin-top: 15px; padding-top: 12px; border-top: 1px dashed #cbd5e1; }
         .stop-item { display: flex; gap: 12px; margin-bottom: 12px; position: relative; }
         .stop-item::before { content: ''; position: absolute; left: 11px; top: 22px; bottom: -14px; width: 2px; background: #e2e8f0; z-index: 0; }
@@ -766,8 +782,9 @@ function App() {
         .stop-addr { font-size: 0.75rem; color: #475569; margin: 2px 0; } 
         .stop-time { font-size: 0.7rem; color: #dc2626; font-weight: bold; margin: 2px 0; }
         .stop-detail { font-size: 0.7rem; color: #059669; margin: 2px 0; }
+        .stop-meta-row { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
         .stop-meta { font-size: 0.65rem; color: #94a3b8; }
-        
+        .toll-badge { font-size: 0.65rem; background: #fee2e2; color: #b91c1c; padding: 1px 4px; border-radius: 4px; font-weight: bold; border: 1px solid #fecaca; }
         .map-wrapper { flex: 1; height: 100%; position: relative; }
         .spinner-mini { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; margin-right: 5px; }
         @keyframes spin { to { transform: rotate(360deg); } }
